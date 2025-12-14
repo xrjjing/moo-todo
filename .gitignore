@@ -32,3 +32,19 @@ htmlcov/
 # 用户数据
 data/
 config.json
+
+AGENTS.md
+CLAUDE.md
+CHANGELOG.md
+/.spec-workflow/
+/.serena/
+/.roo/
+/.claude/
+/.snow/
+
+# 测试文件（仅开发时使用）
+tests/
+**/tests/
+test_*.py
+*_test.py
+*.test.js

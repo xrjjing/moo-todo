@@ -38,6 +38,20 @@ def clean_build():
             print(f"已清理: {d}")
 
 
+def cleanup_temp():
+    """清理打包临时文件（保留 dist）"""
+    root = Path(__file__).parent
+    build_dir = root / "build"
+    spec_file = root / f"{APP_NAME}.spec"
+
+    if build_dir.exists():
+        shutil.rmtree(build_dir)
+        print(f"已删除: {build_dir}")
+    if spec_file.exists():
+        spec_file.unlink()
+        print(f"已删除: {spec_file}")
+
+
 def build_app():
     """构建应用"""
     platform = get_platform()
@@ -90,6 +104,9 @@ def build_app():
         if platform == "macos":
             dist_path = dist_path.with_suffix(".app")
         print(f"输出路径: {dist_path}")
+
+        # 清理临时文件
+        cleanup_temp()
     else:
         print(f"\n❌ 构建失败，退出码: {result.returncode}")
         sys.exit(1)

@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "牛牛待办 - 可爱的任务管理桌面应用"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 keywords = ["todo", "task", "productivity", "desktop", "pywebview"]
 authors = [
     {name = "xrj", email = "your.email@example.com"}
@@ -16,7 +16,6 @@ authors = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -39,6 +38,10 @@ dev = [
 Homepage = "https://github.com/your-username/moo-todo"
 Repository = "https://github.com/your-username/moo-todo.git"
 Issues = "https://github.com/your-username/moo-todo/issues"
+
+[tool.setuptools]
+py-modules = ["main", "api", "build"]
+packages = ["services"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
