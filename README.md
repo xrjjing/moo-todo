@@ -39,13 +39,13 @@
 
 ### 方式一：下载预编译版本
 
-前往 [Releases](https://github.com/your-username/moo-todo/releases) 下载对应平台的安装包。
+前往 [Releases](https://github.com/xrjjing/moo-todo/releases) 下载对应平台的安装包。
 
 ### 方式二：从源码运行
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/moo-todo.git
+git clone https://github.com/xrjjing/moo-todo.git
 cd moo-todo
 
 # 创建虚拟环境
