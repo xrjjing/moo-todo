@@ -1,0 +1,55 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background: Warm Orange Circle (matching Todo/productivity theme) -->
+  <circle cx="256" cy="256" r="224" fill="#FFB347" stroke="#FFF" stroke-width="8"/>
+  <circle cx="256" cy="256" r="210" stroke="#FFE4C4" stroke-width="4" stroke-dasharray="20 10" opacity="0.5"/>
+
+  <!-- Cow Face -->
+  <ellipse cx="256" cy="280" rx="150" ry="130" fill="#F5F5DC"/>
+
+  <!-- Spots on Face -->
+  <ellipse cx="320" cy="220" rx="35" ry="28" fill="#8B4513" opacity="0.5"/>
+  <ellipse cx="180" cy="300" rx="25" ry="20" fill="#8B4513" opacity="0.4"/>
+
+  <!-- Horns -->
+  <path d="M170 200L140 110L210 170" fill="#D2691E"/>
+  <path d="M170 200L155 125L195 165" fill="#FFE4B5"/>
+  <path d="M342 200L372 110L302 170" fill="#D2691E"/>
+  <path d="M342 200L357 125L317 165" fill="#FFE4B5"/>
+
+  <!-- Ears -->
+  <path d="M130 220L105 160L175 200" fill="#F5F5DC" stroke="#DDD" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M382 220L407 160L337 200" fill="#F5F5DC" stroke="#DDD" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- Inner Ears (Pink) -->
+  <path d="M135 210L120 175L165 200" fill="#FFB6C1"/>
+  <path d="M377 210L392 175L347 200" fill="#FFB6C1"/>
+
+  <!-- Eyes -->
+  <ellipse cx="200" cy="250" rx="15" ry="20" fill="#333"/>
+  <ellipse cx="312" cy="250" rx="15" ry="20" fill="#333"/>
+  <!-- Eye Highlights -->
+  <circle cx="195" cy="242" r="5" fill="#FFF"/>
+  <circle cx="307" cy="242" r="5" fill="#FFF"/>
+
+  <!-- Cheeks (Blush) -->
+  <ellipse cx="155" cy="290" rx="18" ry="10" fill="#FFB6C1" opacity="0.5"/>
+  <ellipse cx="357" cy="290" rx="18" ry="10" fill="#FFB6C1" opacity="0.5"/>
+
+  <!-- Nose (Pink Oval) -->
+  <ellipse cx="256" cy="320" rx="45" ry="30" fill="#FFB6C1"/>
+  <!-- Nostrils -->
+  <ellipse cx="240" cy="325" rx="8" ry="10" fill="#444"/>
+  <ellipse cx="272" cy="325" rx="8" ry="10" fill="#444"/>
+
+  <!-- Smile -->
+  <path d="M230 355Q256 375 282 355" stroke="#555" stroke-width="4" stroke-linecap="round" fill="none"/>
+
+  <!-- Checklist Icon (Todo Theme Element) -->
+  <rect x="340" y="380" width="80" height="90" rx="8" fill="#FFF" stroke="#FFB347" stroke-width="3"/>
+  <!-- Checklist Lines -->
+  <rect x="355" y="400" width="50" height="6" rx="2" fill="#B5EAD7"/>
+  <rect x="355" y="420" width="40" height="6" rx="2" fill="#FFE4C4"/>
+  <rect x="355" y="440" width="45" height="6" rx="2" fill="#C7CEEA"/>
+  <!-- Check Mark -->
+  <path d="M360 400L365 405L375 395" stroke="#52B788" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

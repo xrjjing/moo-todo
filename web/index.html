@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牛牛待办</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.min.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="cow-logo">
+                    <div class="cow-face">
+                        <div class="cow-horn left"></div>
+                        <div class="cow-horn right"></div>
+                        <div class="cow-ear left"></div>
+                        <div class="cow-ear right"></div>
+                        <div class="cow-eye left"></div>
+                        <div class="cow-eye right"></div>
+                        <div class="cow-nose"></div>
+                        <div class="cow-spot"></div>
+                    </div>
+                </div>
+                <div class="logo-text">牛牛待办</div>
+            </div>
+
+            <!-- 视图切换 -->
+            <div class="view-switcher">
+                <button class="view-btn active" data-view="list" title="列表视图">
+                    <span class="view-icon">📋</span>
+                    <span class="view-text">列表</span>
+                </button>
+                <button class="view-btn" data-view="kanban" title="看板视图">
+                    <span class="view-icon">📊</span>
+                    <span class="view-text">看板</span>
+                </button>
+                <button class="view-btn" data-view="calendar" title="日历视图">
+                    <span class="view-icon">📅</span>
+                    <span class="view-text">日历</span>
+                </button>
+                <button class="view-btn" data-view="quadrant" title="四象限">
+                    <span class="view-icon">🎯</span>
+                    <span class="view-text">象限</span>
+                </button>
+            </div>
+
+            <!-- 分类列表 -->
+            <div class="categories-section">
+                <div class="section-header">
+                    <span>分类</span>
+                    <button class="btn-icon" onclick="showCategoryModal()">+</button>
+                </div>
+                <div id="categories-list" class="categories-list"></div>
+            </div>
+
+            <!-- 统计概览 -->
+            <div class="stats-mini">
+                <div class="stat-item">
+                    <span class="stat-label">今日完成</span>
+                    <span class="stat-value" id="stat-today-completed">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">🍅 番茄</span>
+                    <span class="stat-value" id="stat-today-pomodoro">0</span>
+                </div>
+            </div>
+
+            <!-- 主题切换 -->
+            <div class="theme-selector-wrapper">
+                <button class="theme-main-btn" id="themeToggleBtn" onclick="toggleThemeMenu()">
+                    <span class="current-icon" id="currentThemeIcon">🐮</span>
+                </button>
+                <div class="theme-popup-menu" id="themeMenu">
+                    <div class="theme-group-label">浅色主题</div>
+                    <div class="theme-grid">
+                        <button class="theme-item" data-theme="light" onclick="selectTheme('light')">
+                            <span class="emoji">☀️</span><span class="label">清爽</span>
+                        </button>
+                        <button class="theme-item active" data-theme="cute" onclick="selectTheme('cute')">
+                            <span class="emoji">🐮</span><span class="label">可爱</span>
+                        </button>
+                        <button class="theme-item" data-theme="office" onclick="selectTheme('office')">
+                            <span class="emoji">📊</span><span class="label">办公</span>
+                        </button>
+                        <button class="theme-item" data-theme="neon-light" onclick="selectTheme('neon-light')">
+                            <span class="emoji">🌊</span><span class="label">极光</span>
+                        </button>
+                        <button class="theme-item" data-theme="forest" onclick="selectTheme('forest')">
+                            <span class="emoji">🌲</span><span class="label">森林</span>
+                        </button>
+                        <button class="theme-item" data-theme="sunset" onclick="selectTheme('sunset')">
+                            <span class="emoji">🌅</span><span class="label">日落</span>
+                        </button>
+                    </div>
+                    <div class="theme-divider"></div>
+                    <div class="theme-group-label">深色主题</div>
+                    <div class="theme-grid">
+                        <button class="theme-item" data-theme="dark" onclick="selectTheme('dark')">
+                            <span class="emoji">🌙</span><span class="label">午夜</span>
+                        </button>
+                        <button class="theme-item" data-theme="neon" onclick="selectTheme('neon')">
+                            <span class="emoji">🌃</span><span class="label">霓虹</span>
+                        </button>
+                        <button class="theme-item" data-theme="cyberpunk" onclick="selectTheme('cyberpunk')">
+                            <span class="emoji">🤖</span><span class="label">赛博</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="content">
+            <!-- 顶部栏 -->
+            <header class="top-bar">
+                <div class="search-box">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="search-input" placeholder="搜索任务..." oninput="handleSearch()">
+                </div>
+                <div class="top-actions">
+                    <button class="btn btn-ghost btn-with-text" onclick="showSettingsModal()" title="设置">
+                        <span class="btn-emoji">⚙️</span>
+                        <span class="btn-label">设置</span>
+                    </button>
+                    <button class="btn btn-ghost btn-with-text" onclick="showStatsModal()" title="专注统计">
+                        <span class="btn-emoji">📈</span>
+                        <span class="btn-label">统计</span>
+                    </button>
+                    <button class="btn btn-ghost btn-with-text" onclick="showSummaryModal()" title="工作总结">
+                        <span class="btn-emoji">📊</span>
+                        <span class="btn-label">总结</span>
+                    </button>
+                    <button class="btn btn-ghost btn-with-text" onclick="showAchievementModal()" title="成就殿堂">
+                        <span class="btn-emoji">🏆</span>
+                        <span class="btn-label">成就</span>
+                    </button>
+                    <button class="btn btn-ghost btn-with-text" onclick="toggleStickyNotes()" title="便签 (S)">
+                        <span class="btn-emoji">📌</span>
+                        <span class="btn-label">便签</span>
+                    </button>
+                    <button class="btn btn-primary" onclick="showTaskModal()">
+                        <span>+ 新任务</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- 筛选栏 -->
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <select id="filter-status" onchange="loadTasks()">
+                        <option value="">全部状态</option>
+                        <option value="not_started">未开始</option>
+                        <option value="in_progress">进行中</option>
+                        <option value="completed">已完成</option>
+                    </select>
+                    <select id="filter-priority" onchange="loadTasks()">
+                        <option value="">全部优先级</option>
+                        <option value="urgent">🔴 紧急</option>
+                        <option value="high">🔵 高</option>
+                        <option value="medium">🟠 中</option>
+                        <option value="low">⚪ 低</option>
+                    </select>
+                    <select id="filter-category" onchange="loadTasks()">
+                        <option value="">全部分类</option>
+                    </select>
+                    <select id="filter-tag" onchange="loadTasks()">
+                        <option value="">全部标签</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 列表视图 -->
+            <div id="view-list" class="view-container active">
+                <div class="task-groups" id="task-groups"></div>
+            </div>
+
+            <!-- 看板视图 -->
+            <div id="view-kanban" class="view-container">
+                <div class="kanban-board">
+                    <div class="kanban-column" data-status="not_started">
+                        <div class="column-header">
+                            <span class="column-title">📝 未开始</span>
+                            <span class="column-count" id="count-not-started">0</span>
+                        </div>
+                        <div class="column-tasks" id="kanban-not-started"></div>
+                    </div>
+                    <div class="kanban-column" data-status="in_progress">
+                        <div class="column-header">
+                            <span class="column-title">🚀 进行中</span>
+                            <span class="column-count" id="count-in-progress">0</span>
+                        </div>
+                        <div class="column-tasks" id="kanban-in-progress"></div>
+                    </div>
+                    <div class="kanban-column" data-status="completed">
+                        <div class="column-header">
+                            <span class="column-title">✅ 已完成</span>
+                            <span class="column-count" id="count-completed">0</span>
+                        </div>
+                        <div class="column-tasks" id="kanban-completed"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 日历视图 -->
+            <div id="view-calendar" class="view-container">
+                <div class="calendar-header">
+                    <button class="btn-icon" onclick="prevMonth()">◀</button>
+                    <span id="calendar-title">2024年1月</span>
+                    <button class="btn-icon" onclick="nextMonth()">▶</button>
+                </div>
+                <div class="calendar-grid" id="calendar-grid"></div>
+            </div>
+
+            <!-- 四象限视图 -->
+            <div id="view-quadrant" class="view-container">
+                <div class="quadrant-grid">
+                    <div class="quadrant q1" data-quadrant="q1">
+                        <div class="quadrant-header urgent">🔥 重要且紧急</div>
+                        <div class="quadrant-tasks" id="quadrant-q1"></div>
+                    </div>
+                    <div class="quadrant q2" data-quadrant="q2">
+                        <div class="quadrant-header high">📌 重要不紧急</div>
+                        <div class="quadrant-tasks" id="quadrant-q2"></div>
+                    </div>
+                    <div class="quadrant q3" data-quadrant="q3">
+                        <div class="quadrant-header medium">⚡ 紧急不重要</div>
+                        <div class="quadrant-tasks" id="quadrant-q3"></div>
+                    </div>
+                    <div class="quadrant q4" data-quadrant="q4">
+                        <div class="quadrant-header low">📋 不重要不紧急</div>
+                        <div class="quadrant-tasks" id="quadrant-q4"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 新建/编辑任务弹窗 -->
+    <div id="task-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('task-modal')"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="task-modal-title">新建任务</h2>
+                <button class="close-btn" onclick="closeModal('task-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="task-id">
+                <div class="form-group">
+                    <label class="form-label">任务标题 *</label>
+                    <input type="text" id="task-title" class="form-input" placeholder="输入任务标题...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">描述</label>
+                    <textarea id="task-description" class="form-input" rows="3" placeholder="添加任务描述..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">优先级</label>
+                        <select id="task-priority" class="form-input">
+                            <option value="medium">🟠 中</option>
+                            <option value="urgent">🔴 紧急</option>
+                            <option value="high">🔵 高</option>
+                            <option value="low">⚪ 低</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">截止日期</label>
+                        <input type="date" id="task-due-date" class="form-input">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">分类</label>
+                        <select id="task-category" class="form-input"></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">四象限</label>
+                        <select id="task-quadrant" class="form-input">
+                            <option value="">未分配</option>
+                            <option value="q1">🔥 重要且紧急</option>
+                            <option value="q2">📌 重要不紧急</option>
+                            <option value="q3">⚡ 紧急不重要</option>
+                            <option value="q4">📋 不重要不紧急</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">标签</label>
+                    <input type="text" id="task-tags" class="form-input" placeholder="输入标签，用逗号分隔...">
+                    <div class="form-hint">多个标签请用英文逗号 , 分隔</div>
+                </div>
+                <!-- 子任务区域（仅编辑时显示） -->
+                <div class="form-group subtask-section" id="subtask-section" style="display:none">
+                    <label class="form-label">子任务</label>
+                    <div class="subtask-add">
+                        <input type="text" id="subtask-input" class="form-input" placeholder="添加子任务..." onkeydown="if(event.key==='Enter'){event.preventDefault();addSubtask();}">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="addSubtask()">+</button>
+                    </div>
+                    <div class="subtask-list" id="subtask-list"></div>
+                    <div class="subtask-progress" id="subtask-progress"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('task-modal')">取消</button>
+                <button class="btn btn-danger" id="btn-delete-task" style="display:none" onclick="deleteCurrentTask()">删除</button>
+                <button class="btn btn-primary" onclick="saveTask()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新建分类弹窗 -->
+    <div id="category-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('category-modal')"></div>
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h2>新建分类</h2>
+                <button class="close-btn" onclick="closeModal('category-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">分类名称</label>
+                    <input type="text" id="category-name" class="form-input" placeholder="输入分类名称...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">图标</label>
+                    <div class="emoji-picker" id="category-emoji-picker"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">颜色</label>
+                    <div class="color-picker" id="category-color-picker"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('category-modal')">取消</button>
+                <button class="btn btn-primary" onclick="saveCategory()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 工作总结弹窗 -->
+    <div id="summary-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('summary-modal')"></div>
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>📊 工作总结</h2>
+                <button class="close-btn" onclick="closeModal('summary-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="summary-tabs">
+                    <button class="summary-tab active" data-period="day" onclick="switchSummaryTab('day')">日报</button>
+                    <button class="summary-tab" data-period="week" onclick="switchSummaryTab('week')">周报</button>
+                    <button class="summary-tab" data-period="month" onclick="switchSummaryTab('month')">月报</button>
+                </div>
+                <div class="summary-stats" id="summary-stats">
+                    <div class="stat-card">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="summary-completed">0</span>
+                            <span class="stat-label">完成任务</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🍅</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="summary-pomodoros">0</span>
+                            <span class="stat-label">番茄数</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">⏱️</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="summary-hours">0</span>
+                            <span class="stat-label">专注时长(h)</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">📈</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="summary-rate">0%</span>
+                            <span class="stat-label">完成率</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="summary-content">
+                    <h3>📝 任务明细</h3>
+                    <div class="summary-task-list" id="summary-task-list"></div>
+                </div>
+                <div class="summary-text">
+                    <h3>📋 文字总结</h3>
+                    <textarea id="summary-text" class="form-input" rows="6" readonly></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('summary-modal')">关闭</button>
+                <button class="btn btn-primary" onclick="copySummary()">📋 复制总结</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置弹窗 -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('settings-modal')"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ 设置</h2>
+                <button class="close-btn" onclick="closeModal('settings-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <h3 class="settings-title">🍅 番茄钟设置</h3>
+                    <div class="settings-row">
+                        <label class="form-label">工作时长（分钟）</label>
+                        <input type="number" id="settings-pomodoro-work" class="form-input form-input-sm" min="1" max="120" value="25">
+                    </div>
+                    <div class="settings-row">
+                        <label class="form-label">短休息（分钟）</label>
+                        <input type="number" id="settings-pomodoro-break" class="form-input form-input-sm" min="1" max="60" value="5">
+                    </div>
+                    <div class="settings-row">
+                        <label class="form-label">长休息（分钟）</label>
+                        <input type="number" id="settings-pomodoro-long-break" class="form-input form-input-sm" min="1" max="60" value="15">
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="settings-title">📦 数据管理</h3>
+                    <div class="settings-row">
+                        <span class="settings-desc">导出所有数据为 JSON 文件</span>
+                        <button class="btn btn-sm" onclick="exportData()">导出数据</button>
+                    </div>
+                    <div class="settings-row">
+                        <span class="settings-desc">从 JSON 文件导入数据</span>
+                        <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+                        <button class="btn btn-sm" onclick="document.getElementById('import-file').click()">导入数据</button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="settings-title">📊 数据统计</h3>
+                    <div class="data-stats" id="data-stats">
+                        <div class="data-stat-item">
+                            <span class="data-stat-label">任务总数</span>
+                            <span class="data-stat-value" id="data-stat-tasks">0</span>
+                        </div>
+                        <div class="data-stat-item">
+                            <span class="data-stat-label">分类数量</span>
+                            <span class="data-stat-value" id="data-stat-categories">0</span>
+                        </div>
+                        <div class="data-stat-item">
+                            <span class="data-stat-label">番茄记录</span>
+                            <span class="data-stat-value" id="data-stat-pomodoros">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="settings-title">⌨️ 快捷键</h3>
+                    <div class="shortcuts-list">
+                        <div class="shortcut-item"><kbd>N</kbd> 新建任务</div>
+                        <div class="shortcut-item"><kbd>E</kbd> 编辑选中</div>
+                        <div class="shortcut-item"><kbd>Space</kbd> 完成/取消</div>
+                        <div class="shortcut-item"><kbd>↑↓</kbd> 选择任务</div>
+                        <div class="shortcut-item"><kbd>P</kbd> 番茄钟</div>
+                        <div class="shortcut-item"><kbd>S</kbd> 便签</div>
+                        <div class="shortcut-item"><kbd>1-4</kbd> 切换视图</div>
+                        <div class="shortcut-item"><kbd>/</kbd> 搜索</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('settings-modal')">取消</button>
+                <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 番茄钟悬浮窗 -->
+    <div id="pomodoro-widget" class="pomodoro-widget hidden">
+        <div class="pomodoro-header">
+            <span id="pomodoro-task-title">任务名称</span>
+            <button class="btn-icon btn-sm" onclick="closePomodoroWidget()">×</button>
+        </div>
+        <div class="pomodoro-timer">
+            <svg class="pomodoro-ring" viewBox="0 0 100 100">
+                <circle class="ring-bg" cx="50" cy="50" r="45"></circle>
+                <circle class="ring-progress" id="pomodoro-progress" cx="50" cy="50" r="45"></circle>
+            </svg>
+            <div class="pomodoro-time" id="pomodoro-time">25:00</div>
+        </div>
+        <div class="pomodoro-controls">
+            <button class="btn btn-sm" id="btn-pomodoro-toggle" onclick="togglePomodoro()">开始</button>
+            <button class="btn btn-ghost btn-sm" onclick="resetPomodoro()">重置</button>
+        </div>
+    </div>
+
+    <!-- 便签悬浮窗 -->
+    <div id="sticky-notes" class="sticky-notes hidden">
+        <div class="sticky-header" id="sticky-drag-handle">
+            <span class="sticky-title">📌 今日任务</span>
+            <div class="sticky-controls">
+                <button class="sticky-btn" onclick="adjustStickyOpacity(-0.1)" title="降低透明度">◐</button>
+                <button class="sticky-btn" onclick="adjustStickyOpacity(0.1)" title="增加透明度">◑</button>
+                <button class="sticky-btn" onclick="toggleStickyMinimize()" title="最小化">−</button>
+                <button class="sticky-btn" onclick="closeStickyNotes()" title="关闭">×</button>
+            </div>
+        </div>
+        <div class="sticky-body" id="sticky-body">
+            <div class="sticky-tasks" id="sticky-tasks"></div>
+            <div class="sticky-stats">
+                <span id="sticky-stat-done">0</span> / <span id="sticky-stat-total">0</span> 完成
+            </div>
+        </div>
+    </div>
+
+    <!-- 专注统计弹窗 -->
+    <div id="stats-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('stats-modal')"></div>
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>🍅 专注统计</h2>
+                <button class="close-btn" onclick="closeModal('stats-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="stats-section">
+                    <h3 class="stats-title">📈 近30天专注趋势</h3>
+                    <div id="pomodoro-trend-chart" class="chart-container"></div>
+                </div>
+                <div class="stats-section">
+                    <h3 class="stats-title">🔥 年度专注热力图</h3>
+                    <div class="heatmap-container">
+                        <div class="heatmap-scroll">
+                            <div id="pomodoro-heatmap" class="heatmap-grid"></div>
+                        </div>
+                        <div class="heatmap-legend">
+                            <span>少</span>
+                            <div class="legend-item level-0"></div>
+                            <div class="legend-item level-1"></div>
+                            <div class="legend-item level-2"></div>
+                            <div class="legend-item level-3"></div>
+                            <div class="legend-item level-4"></div>
+                            <span>多</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="stats-section">
+                    <h3 class="stats-title">📁 分类专注时长</h3>
+                    <div id="category-stats" class="category-stats-grid"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 成就模态框 -->
+    <div id="achievement-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('achievement-modal')"></div>
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>🏆 成就殿堂</h2>
+                <button class="close-btn" onclick="closeModal('achievement-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="achievement-stats">
+                    <div class="achievement-stat-item">
+                        <span class="stat-value" id="achievement-unlocked">0</span>
+                        <span class="stat-label">已解锁</span>
+                    </div>
+                    <div class="achievement-stat-item">
+                        <span class="stat-value" id="achievement-total">0</span>
+                        <span class="stat-label">总成就</span>
+                    </div>
+                    <div class="achievement-stat-item">
+                        <span class="stat-value" id="achievement-streak">0</span>
+                        <span class="stat-label">连续天数</span>
+                    </div>
+                </div>
+                <div class="achievement-grid" id="achievement-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 成就解锁提示 -->
+    <div id="achievement-toast" class="achievement-toast hidden">
+        <div class="achievement-toast-content">
+            <span class="achievement-toast-icon" id="achievement-toast-icon">🏆</span>
+            <div class="achievement-toast-text">
+                <span class="achievement-toast-title">成就解锁！</span>
+                <span class="achievement-toast-name" id="achievement-toast-name"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast hidden">
+        <span class="toast-icon">🐮</span>
+        <span class="toast-message" id="toast-message"></span>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.iife.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
