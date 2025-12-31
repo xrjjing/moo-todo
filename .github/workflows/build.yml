@@ -53,7 +53,7 @@ jobs:
 
       - name: Verify dependencies
         run: |
-          python -c "import webview; print('pywebview OK:', webview.__version__)"
+          python -c "import webview; print('pywebview OK')"
 
       - name: Build
         run: |
