@@ -29,6 +29,7 @@ def main():
     )
 
     webview.start(debug=False)
+    sys.exit()
 
 
 if __name__ == "__main__":

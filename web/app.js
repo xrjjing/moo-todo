@@ -20,7 +20,11 @@ const state = {
     stickyPosition: { x: 30, y: null }, // y=null 表示使用 bottom
     // 键盘导航
     selectedTaskIndex: -1,
-    keyboardNavTasks: []
+    keyboardNavTasks: [],
+    // 快捷键配置
+    shortcuts: {},
+    shortcutLabels: {},
+    editingShortcut: null
 };
 
 // ===== 工具函数 =====
@@ -59,6 +63,7 @@ function getLocalDateStr() {
 document.addEventListener('DOMContentLoaded', async () => {
     await waitForApi();
     initTheme();
+    initZoom();
     initViewSwitcher();
     await loadCategories();
     await loadTags();
@@ -133,6 +138,18 @@ function updateThemeSelector(activeTheme) {
     document.querySelectorAll('.theme-item').forEach(opt => {
         opt.classList.toggle('active', opt.dataset.theme === activeTheme);
     });
+}
+
+// ===== 缩放系统 =====
+async function initZoom() {
+    let savedZoom = 100;
+    try {
+        savedZoom = await pywebview.api.get_zoom();
+    } catch (e) {
+        savedZoom = parseInt(localStorage.getItem('zoom')) || 100;
+    }
+    applyZoom(savedZoom);
+    localStorage.setItem('zoom', savedZoom);
 }
 
 // ===== 视图切换 =====
@@ -864,75 +881,76 @@ function updatePomodoroDisplay() {
 }
 
 // ===== 键盘快捷键 =====
-function initKeyboardShortcuts() {
-    document.addEventListener('keydown', (e) => {
-        // 忽略输入框中的按键
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
-            return;
-        }
+async function initKeyboardShortcuts() {
+    try {
+        const data = await pywebview.api.get_shortcuts();
+        state.shortcuts = data.shortcuts || {};
+        state.shortcutLabels = data.labels || {};
+    } catch (e) {
+        console.error('加载快捷键配置失败:', e);
+    }
 
-        // 如果有弹窗打开，只处理 Escape
-        if (document.querySelector('.modal.show')) {
-            if (e.key === 'Escape') {
-                document.querySelectorAll('.modal.show').forEach(m => m.classList.remove('show'));
-            }
-            return;
-        }
+    document.addEventListener('keydown', handleKeyboardShortcut);
+}
 
-        switch (e.key.toLowerCase()) {
-            case 'n':
-                e.preventDefault();
-                showTaskModal();
-                break;
-            case 'e':
-                e.preventDefault();
-                editSelectedTask();
-                break;
-            case 'p':
-                e.preventDefault();
-                startPomodoroForSelected();
-                break;
-            case 's':
-                e.preventDefault();
-                toggleStickyNotes();
-                break;
-            case '1':
-                e.preventDefault();
-                switchView('list');
-                break;
-            case '2':
-                e.preventDefault();
-                switchView('kanban');
-                break;
-            case '3':
-                e.preventDefault();
-                switchView('calendar');
-                break;
-            case '4':
-                e.preventDefault();
-                switchView('quadrant');
-                break;
-            case '/':
-                e.preventDefault();
-                document.getElementById('search-input').focus();
-                break;
-            case 'arrowup':
-                e.preventDefault();
-                navigateTask(-1);
-                break;
-            case 'arrowdown':
-                e.preventDefault();
-                navigateTask(1);
-                break;
-            case ' ':
-                e.preventDefault();
-                toggleSelectedTaskStatus();
-                break;
-            case 'escape':
-                clearTaskSelection();
-                break;
+function handleKeyboardShortcut(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+        return;
+    }
+
+    if (document.querySelector('.modal.show')) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal.show').forEach(m => m.classList.remove('show'));
         }
-    });
+        return;
+    }
+
+    const action = matchShortcut(e);
+    if (!action) return;
+
+    e.preventDefault();
+    executeShortcutAction(action);
+}
+
+function matchShortcut(e) {
+    const pressedCtrl = e.ctrlKey || e.metaKey;
+    const pressedAlt = e.altKey;
+    const pressedShift = e.shiftKey;
+    const pressedKey = e.key;
+
+    for (const [action, shortcut] of Object.entries(state.shortcuts)) {
+        if (!shortcut || !shortcut.key) continue;
+        const matchCtrl = shortcut.ctrl === pressedCtrl;
+        const matchAlt = shortcut.alt === pressedAlt;
+        const matchShift = shortcut.shift === pressedShift;
+        const matchKey = shortcut.key.toLowerCase() === pressedKey.toLowerCase();
+
+        if (matchCtrl && matchAlt && matchShift && matchKey) {
+            return action;
+        }
+    }
+    return null;
+}
+
+function executeShortcutAction(action) {
+    const actions = {
+        newTask: () => showTaskModal(),
+        editTask: () => editSelectedTask(),
+        startPomodoro: () => startPomodoroForSelected(),
+        toggleSticky: () => toggleStickyNotes(),
+        viewList: () => switchView('list'),
+        viewKanban: () => switchView('kanban'),
+        viewCalendar: () => switchView('calendar'),
+        viewQuadrant: () => switchView('quadrant'),
+        focusSearch: () => document.getElementById('search-input').focus(),
+        toggleTaskStatus: () => toggleSelectedTaskStatus(),
+        navigateUp: () => navigateTask(-1),
+        navigateDown: () => navigateTask(1)
+    };
+
+    if (actions[action]) {
+        actions[action]();
+    }
 }
 
 // 键盘导航：选择任务
@@ -1321,6 +1339,10 @@ async function loadSettingsData() {
         document.getElementById('settings-pomodoro-break').value = settings.pomodoro_break || 5;
         document.getElementById('settings-pomodoro-long-break').value = settings.pomodoro_long_break || 15;
 
+        const zoom = settings.zoom || 100;
+        document.getElementById('settings-zoom').value = zoom;
+        document.getElementById('zoom-value').textContent = zoom + '%';
+
         const dataStats = await pywebview.api.get_data_stats();
         document.getElementById('data-stat-tasks').textContent = dataStats.tasks || 0;
         document.getElementById('data-stat-categories').textContent = dataStats.categories || 0;
@@ -1330,10 +1352,200 @@ async function loadSettingsData() {
     }
 }
 
+function previewZoom(value) {
+    document.getElementById('zoom-value').textContent = value + '%';
+    applyZoom(value);
+}
+
+function applyZoom(zoom) {
+    document.body.style.zoom = zoom / 100;
+}
+
+// ===== 快捷键配置 =====
+async function loadShortcutsConfig() {
+    try {
+        const data = await pywebview.api.get_shortcuts();
+        state.shortcuts = data.shortcuts || {};
+        state.shortcutLabels = data.labels || {};
+        renderShortcutsConfig();
+    } catch (e) {
+        console.error('加载快捷键配置失败:', e);
+    }
+}
+
+function renderShortcutsConfig() {
+    const container = document.getElementById('shortcuts-config-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+    const orderedKeys = [
+        'newTask', 'editTask', 'toggleTaskStatus', 'startPomodoro', 'toggleSticky',
+        'focusSearch', 'viewList', 'viewKanban', 'viewCalendar', 'viewQuadrant',
+        'navigateUp', 'navigateDown'
+    ];
+
+    for (const action of orderedKeys) {
+        if (!state.shortcutLabels[action]) continue;
+        const shortcut = state.shortcuts[action] || {};
+        const label = state.shortcutLabels[action];
+        const displayText = formatShortcut(shortcut);
+
+        const item = document.createElement('div');
+        item.className = 'shortcut-config-item';
+        item.innerHTML = `
+            <span class="shortcut-label">${escapeHtml(label)}</span>
+            <input type="text" class="shortcut-input" data-action="${action}"
+                   value="${escapeHtml(displayText)}" readonly
+                   placeholder="点击录入快捷键">
+            <button class="shortcut-clear" data-action="${action}" title="清除">✕</button>
+        `;
+        container.appendChild(item);
+    }
+
+    container.querySelectorAll('.shortcut-input').forEach(input => {
+        input.addEventListener('focus', startShortcutRecording);
+        input.addEventListener('blur', stopShortcutRecording);
+        input.addEventListener('keydown', recordShortcut);
+    });
+
+    container.querySelectorAll('.shortcut-clear').forEach(btn => {
+        btn.addEventListener('click', clearShortcut);
+    });
+}
+
+function formatShortcut(shortcut) {
+    if (!shortcut || !shortcut.key) return '未设置';
+    const parts = [];
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    if (shortcut.ctrl) parts.push(isMac ? '⌘' : 'Ctrl');
+    if (shortcut.alt) parts.push(isMac ? '⌥' : 'Alt');
+    if (shortcut.shift) parts.push(isMac ? '⇧' : 'Shift');
+    parts.push(formatKeyName(shortcut.key));
+    return parts.join(' + ');
+}
+
+function formatKeyName(key) {
+    const keyMap = {
+        ' ': 'Space',
+        'ArrowUp': '↑',
+        'ArrowDown': '↓',
+        'ArrowLeft': '←',
+        'ArrowRight': '→',
+        'Escape': 'Esc',
+        'Enter': 'Enter',
+        'Backspace': '⌫',
+        'Delete': 'Del',
+        'Tab': 'Tab'
+    };
+    return keyMap[key] || key.toUpperCase();
+}
+
+function startShortcutRecording(e) {
+    const input = e.target;
+    input.classList.add('recording');
+    input.value = '按下组合键...';
+    state.editingShortcut = input.dataset.action;
+}
+
+function stopShortcutRecording(e) {
+    const input = e.target;
+    input.classList.remove('recording');
+    state.editingShortcut = null;
+    const action = input.dataset.action;
+    const shortcut = state.shortcuts[action];
+    input.value = formatShortcut(shortcut);
+}
+
+function recordShortcut(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const action = state.editingShortcut;
+    if (!action) return;
+
+    const key = e.key;
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(key)) return;
+
+    const newShortcut = {
+        ctrl: e.ctrlKey || e.metaKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+        key: key
+    };
+
+    const conflict = checkShortcutConflict(action, newShortcut);
+    const input = e.target;
+
+    if (conflict) {
+        input.classList.add('conflict');
+        input.value = `冲突: ${state.shortcutLabels[conflict]}`;
+        setTimeout(() => {
+            input.classList.remove('conflict');
+            input.value = formatShortcut(state.shortcuts[action]);
+        }, 1500);
+        return;
+    }
+
+    state.shortcuts[action] = newShortcut;
+    input.value = formatShortcut(newShortcut);
+    input.classList.remove('recording');
+    input.blur();
+}
+
+function checkShortcutConflict(currentAction, newShortcut) {
+    for (const [action, shortcut] of Object.entries(state.shortcuts)) {
+        if (action === currentAction) continue;
+        if (!shortcut || !shortcut.key) continue;
+        if (shortcut.ctrl === newShortcut.ctrl &&
+            shortcut.alt === newShortcut.alt &&
+            shortcut.shift === newShortcut.shift &&
+            shortcut.key.toLowerCase() === newShortcut.key.toLowerCase()) {
+            return action;
+        }
+    }
+    return null;
+}
+
+function clearShortcut(e) {
+    const action = e.target.dataset.action;
+    state.shortcuts[action] = { ctrl: false, alt: false, shift: false, key: '' };
+    const input = document.querySelector(`.shortcut-input[data-action="${action}"]`);
+    if (input) input.value = '未设置';
+}
+
+async function showShortcutsModal() {
+    await loadShortcutsConfig();
+    openModal('shortcuts-modal');
+}
+
+async function saveShortcutsAndClose() {
+    try {
+        await pywebview.api.save_shortcuts(state.shortcuts);
+        closeModal('shortcuts-modal');
+        showToast('快捷键已保存哞！');
+    } catch (e) {
+        showToast('保存失败：' + e, true);
+    }
+}
+
+async function resetShortcuts() {
+    if (!confirm('确定要恢复所有快捷键为默认设置吗？')) return;
+    try {
+        const data = await pywebview.api.reset_shortcuts();
+        state.shortcuts = data.shortcuts || {};
+        state.shortcutLabels = data.labels || {};
+        renderShortcutsConfig();
+        showToast('快捷键已恢复默认哞！');
+    } catch (e) {
+        showToast('重置失败：' + e, true);
+    }
+}
+
 async function saveSettings() {
     const pomodoroWork = parseInt(document.getElementById('settings-pomodoro-work').value) || 25;
     const pomodoroBreak = parseInt(document.getElementById('settings-pomodoro-break').value) || 5;
     const pomodoroLongBreak = parseInt(document.getElementById('settings-pomodoro-long-break').value) || 15;
+    const zoom = parseInt(document.getElementById('settings-zoom').value) || 100;
 
     try {
         await pywebview.api.update_settings({
@@ -1341,6 +1553,7 @@ async function saveSettings() {
             pomodoro_break: pomodoroBreak,
             pomodoro_long_break: pomodoroLongBreak
         });
+        await pywebview.api.save_zoom(zoom);
         closeModal('settings-modal');
         showToast('设置已保存哞！');
     } catch (e) {
@@ -1350,43 +1563,47 @@ async function saveSettings() {
 
 async function exportData() {
     try {
-        const data = await pywebview.api.export_data();
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `牛牛待办_备份_${new Date().toISOString().split('T')[0]}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
-        showToast('数据已导出哞！');
+        const dbPath = await pywebview.api.get_db_path();
+        const date = new Date().toISOString().split('T')[0];
+        const exportPath = dbPath.replace(/[^/\\]+$/, `牛牛待办_备份_${date}.db`);
+
+        const result = await pywebview.api.export_db(exportPath);
+        if (result.success) {
+            showToast(`数据已导出到: ${result.path}`);
+        } else {
+            showToast('导出失败：' + result.error, true);
+        }
     } catch (e) {
         showToast('导出失败：' + e, true);
     }
 }
 
-function handleImportFile(event) {
+async function handleImportFile(event) {
     const file = event.target.files[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        try {
-            const data = JSON.parse(e.target.result);
-            if (!confirm('导入数据将覆盖现有数据，确定继续吗？')) {
-                return;
-            }
-            const result = await pywebview.api.import_data(data);
-            if (result.success) {
-                showToast('数据导入成功哞！正在刷新...');
-                setTimeout(() => location.reload(), 1000);
-            } else {
-                showToast('导入失败：' + (result.error || '未知错误'), true);
-            }
-        } catch (e) {
-            showToast('文件格式错误：' + e, true);
+    if (!file.name.endsWith('.db')) {
+        showToast('请选择 .db 格式的数据库文件', true);
+        event.target.value = '';
+        return;
+    }
+
+    if (!confirm('导入数据将覆盖现有数据，确定继续吗？')) {
+        event.target.value = '';
+        return;
+    }
+
+    try {
+        const result = await pywebview.api.import_db(file.path || file.name);
+        if (result.success) {
+            showToast('数据导入成功哞！正在刷新...');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showToast('导入失败：' + (result.error || '未知错误'), true);
         }
-    };
-    reader.readAsText(file);
+    } catch (e) {
+        showToast('导入失败：' + e, true);
+    }
     event.target.value = '';
 }
 
@@ -1661,3 +1878,544 @@ toggleTaskStatus = async function(taskId) {
         await checkAndShowAchievements();
     }
 };
+
+// ========== AI 聊天功能 ==========
+
+const aiState = {
+    sessions: [],
+    currentSessionId: null,
+    messages: [],
+    providers: [],
+    activeProvider: null,
+    isLoading: false
+};
+
+async function showAIChatModal() {
+    openModal('ai-chat-modal');
+    await loadAIProviders();
+    await loadAISessions();
+    updateAIProviderIndicator();
+}
+
+async function loadAIProviders() {
+    try {
+        aiState.providers = await pywebview.api.get_ai_providers();
+        aiState.activeProvider = aiState.providers.find(p => p.active);
+        updateAIProviderIndicator();
+    } catch (e) {
+        console.error('加载 AI Provider 失败:', e);
+    }
+}
+
+function updateAIProviderIndicator() {
+    const indicator = document.getElementById('ai-provider-indicator');
+    if (!indicator) return;
+
+    const dot = indicator.querySelector('.ai-provider-dot');
+    const name = indicator.querySelector('.ai-provider-name');
+
+    if (aiState.activeProvider) {
+        dot.classList.add('connected');
+        name.textContent = aiState.activeProvider.name;
+    } else {
+        dot.classList.remove('connected');
+        name.textContent = '未配置';
+    }
+}
+
+async function loadAISessions() {
+    try {
+        aiState.sessions = await pywebview.api.get_chat_sessions(false);
+        renderAISessions();
+    } catch (e) {
+        console.error('加载会话失败:', e);
+    }
+}
+
+function renderAISessions() {
+    const container = document.getElementById('ai-sessions-list');
+    if (!container) return;
+
+    if (aiState.sessions.length === 0) {
+        container.innerHTML = '<div class="ai-empty-state">暂无会话</div>';
+        return;
+    }
+
+    container.innerHTML = aiState.sessions.map(session => `
+        <div class="ai-session-item ${session.id === aiState.currentSessionId ? 'active' : ''}"
+             onclick="selectAISession('${session.id}')">
+            <span class="ai-session-title">${escapeHtml(session.title || '新对话')}</span>
+            <button class="ai-session-delete" onclick="event.stopPropagation(); deleteAISession('${session.id}')">×</button>
+        </div>
+    `).join('');
+}
+
+async function createAISession() {
+    try {
+        const result = await pywebview.api.create_chat_session('新对话');
+        if (!result || !result.id) {
+            showToast('创建会话失败', true);
+            return false;
+        }
+        aiState.currentSessionId = result.id;
+        await loadAISessions();
+        clearAIChatMessages();
+        showToast('新会话已创建');
+        return true;
+    } catch (e) {
+        showToast('创建会话失败', true);
+        return false;
+    }
+}
+
+async function selectAISession(sessionId) {
+    aiState.currentSessionId = sessionId;
+    renderAISessions();
+
+    const requestedId = sessionId;
+    const messages = await loadAIChatMessages(sessionId);
+
+    if (aiState.currentSessionId === requestedId) {
+        aiState.messages = messages || [];
+        renderAIChatMessages();
+    }
+}
+
+async function deleteAISession(sessionId) {
+    if (!confirm('确定删除此会话？')) return;
+
+    try {
+        await pywebview.api.delete_chat_session(sessionId);
+        if (aiState.currentSessionId === sessionId) {
+            aiState.currentSessionId = null;
+            clearAIChatMessages();
+        }
+        await loadAISessions();
+        showToast('会话已删除');
+    } catch (e) {
+        showToast('删除失败');
+    }
+}
+
+async function loadAIChatMessages(sessionId) {
+    try {
+        const messages = await pywebview.api.get_chat_messages(sessionId);
+        return messages || [];
+    } catch (e) {
+        console.error('加载消息失败:', e);
+        showToast('加载消息失败', true);
+        return [];
+    }
+}
+
+function renderAIChatMessages() {
+    const container = document.getElementById('ai-chat-messages');
+    if (!container) return;
+
+    if (aiState.messages.length === 0) {
+        container.innerHTML = `
+            <div class="ai-chat-welcome">
+                <div class="ai-welcome-icon">🤖</div>
+                <div class="ai-welcome-text">你好！我是 AI 助手，有什么可以帮助你的吗？</div>
+                <div class="ai-welcome-tips">
+                    <div class="ai-tip">💡 可以问我关于任务管理的建议</div>
+                    <div class="ai-tip">📝 帮你整理和规划待办事项</div>
+                    <div class="ai-tip">🎯 提供时间管理和效率提升技巧</div>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = aiState.messages.map(msg => `
+        <div class="ai-message ${msg.role}">
+            <div class="ai-message-avatar">${msg.role === 'user' ? '👤' : '🤖'}</div>
+            <div class="ai-message-content">${formatAIMessage(msg.content)}</div>
+        </div>
+    `).join('');
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function formatAIMessage(content) {
+    // 简单的 Markdown 转换
+    let html = escapeHtml(content);
+    // 代码块
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    // 行内代码
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // 换行
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
+function clearAIChatMessages() {
+    aiState.messages = [];
+    renderAIChatMessages();
+}
+
+async function clearAIChat() {
+    if (!aiState.currentSessionId) {
+        showToast('请先选择或创建会话');
+        return;
+    }
+
+    if (!confirm('确定清空当前会话的所有消息？')) return;
+
+    try {
+        await pywebview.api.clear_chat_messages(aiState.currentSessionId);
+        clearAIChatMessages();
+        showToast('消息已清空');
+    } catch (e) {
+        showToast('清空失败');
+    }
+}
+
+function handleAIChatKeydown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (!aiState.isLoading) {
+            sendAIMessage();
+        }
+    }
+}
+
+async function sendAIMessage() {
+    const input = document.getElementById('ai-chat-input');
+    if (!input) return;
+
+    const content = input.value.trim();
+    if (!content) return;
+
+    if (aiState.isLoading) return;
+
+    if (!aiState.activeProvider) {
+        showToast('请先配置 AI 服务商', true);
+        showAISettingsModal();
+        return;
+    }
+
+    if (!aiState.currentSessionId) {
+        const created = await createAISession();
+        if (!created || !aiState.currentSessionId) {
+            return;
+        }
+    }
+
+    const sessionId = aiState.currentSessionId;
+    input.value = '';
+    input.style.height = 'auto';
+
+    const userMessage = { role: 'user', content };
+    aiState.messages.push(userMessage);
+    renderAIChatMessages();
+
+    aiState.isLoading = true;
+    const sendBtn = document.getElementById('ai-send-btn');
+    if (sendBtn) sendBtn.disabled = true;
+
+    const container = document.getElementById('ai-chat-messages');
+    let typingDiv = null;
+    if (container) {
+        typingDiv = document.createElement('div');
+        typingDiv.className = 'ai-message assistant';
+        typingDiv.innerHTML = `
+            <div class="ai-message-avatar">🤖</div>
+            <div class="ai-typing-indicator">
+                <span></span><span></span><span></span>
+            </div>
+        `;
+        container.appendChild(typingDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    try {
+        const result = await pywebview.api.send_chat_message(sessionId, content);
+
+        if (typingDiv) typingDiv.remove();
+
+        if (sessionId !== aiState.currentSessionId) {
+            return;
+        }
+
+        if (result.success) {
+            aiState.messages.push({
+                role: 'assistant',
+                content: result.ai_message.content
+            });
+            renderAIChatMessages();
+        } else {
+            showToast(result.error || 'AI 回复失败', true);
+            aiState.messages.push({
+                role: 'assistant',
+                content: `❌ 发送失败: ${result.error || '未知错误'}`,
+                isError: true
+            });
+            renderAIChatMessages();
+        }
+    } catch (e) {
+        if (typingDiv) typingDiv.remove();
+        showToast('发送失败: ' + e.message, true);
+        aiState.messages.push({
+            role: 'assistant',
+            content: `❌ 发送失败: ${e.message}`,
+            isError: true
+        });
+        renderAIChatMessages();
+    } finally {
+        aiState.isLoading = false;
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
+// ========== AI 设置功能 ==========
+
+async function showAISettingsModal() {
+    openModal('ai-settings-modal');
+    await loadAIProvidersList();
+    hideProviderForm();
+}
+
+async function loadAIProvidersList() {
+    try {
+        const providers = await pywebview.api.get_ai_providers();
+        const container = document.getElementById('ai-providers-list');
+
+        if (providers.length === 0) {
+            container.innerHTML = '<div class="ai-empty-state">暂无配置的 AI 服务商<br>点击上方"添加"按钮开始配置</div>';
+            return;
+        }
+
+        container.innerHTML = providers.map(p => `
+            <div class="ai-provider-item ${p.active ? 'active' : ''}">
+                <div class="ai-provider-info">
+                    <div class="ai-provider-icon">${getProviderIcon(p.type)}</div>
+                    <div class="ai-provider-details">
+                        <span class="ai-provider-name">${escapeHtml(p.name)}</span>
+                        <span class="ai-provider-type">${getProviderTypeName(p.type)}</span>
+                    </div>
+                </div>
+                <div class="ai-provider-actions">
+                    ${!p.active ? `<button class="btn btn-sm" onclick="switchAIProvider('${p.id}')">启用</button>` : '<span style="color:var(--positive);font-size:0.8rem">✓ 已启用</span>'}
+                    <button class="btn btn-sm btn-ghost" onclick="editAIProvider('${p.id}')">编辑</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteAIProvider('${p.id}')">删除</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('加载 Provider 列表失败:', e);
+    }
+}
+
+function getProviderIcon(type) {
+    const icons = {
+        'openai': '🟢',
+        'claude': '🟣',
+        'openai-compatible': '🔵'
+    };
+    return icons[type] || '🤖';
+}
+
+function getProviderTypeName(type) {
+    const names = {
+        'openai': 'OpenAI',
+        'claude': 'Claude (Anthropic)',
+        'openai-compatible': 'OpenAI 兼容'
+    };
+    return names[type] || type;
+}
+
+function showAddProviderForm() {
+    document.getElementById('ai-provider-form').style.display = 'block';
+    document.getElementById('ai-provider-form-title').textContent = '添加 AI 服务商';
+    document.getElementById('ai-provider-id').value = '';
+    document.getElementById('ai-provider-name').value = '';
+    document.getElementById('ai-provider-type').value = 'openai';
+    document.getElementById('ai-provider-apikey').value = '';
+    document.getElementById('ai-provider-baseurl').value = 'https://api.openai.com/v1';
+    document.getElementById('ai-provider-model').innerHTML = '<option value="">请先获取模型列表</option>';
+    onProviderTypeChange();
+}
+
+function hideProviderForm() {
+    document.getElementById('ai-provider-form').style.display = 'none';
+}
+
+function onProviderTypeChange() {
+    const type = document.getElementById('ai-provider-type').value;
+    const baseUrlInput = document.getElementById('ai-provider-baseurl');
+
+    const defaultUrls = {
+        'openai': 'https://api.openai.com/v1',
+        'claude': 'https://api.anthropic.com',
+        'openai-compatible': ''
+    };
+
+    baseUrlInput.value = defaultUrls[type] || '';
+    baseUrlInput.placeholder = type === 'openai-compatible' ? '输入 API 地址' : defaultUrls[type];
+}
+
+async function fetchAIModels() {
+    const type = document.getElementById('ai-provider-type').value;
+    const apiKey = document.getElementById('ai-provider-apikey').value;
+    const baseUrl = document.getElementById('ai-provider-baseurl').value;
+
+    if (!apiKey) {
+        showToast('请先输入 API Key', true);
+        return;
+    }
+
+    try {
+        showToast('正在获取模型列表...');
+        const models = await pywebview.api.fetch_ai_models({
+            type,
+            api_key: apiKey,
+            base_url: baseUrl
+        });
+
+        const select = document.getElementById('ai-provider-model');
+        if (!Array.isArray(models)) {
+            select.innerHTML = '<option value="">获取模型失败</option>';
+            showToast('获取模型失败', true);
+            return;
+        }
+
+        if (models.length === 0) {
+            select.innerHTML = '<option value="">未找到可用模型</option>';
+        } else {
+            select.innerHTML = models.map(m => `<option value="${escapeAttr(m.id)}">${escapeHtml(m.name || m.id)}</option>`).join('');
+        }
+        showToast(`找到 ${models.length} 个模型`);
+    } catch (e) {
+        showToast('获取模型失败: ' + e.message, true);
+        const select = document.getElementById('ai-provider-model');
+        if (select) select.innerHTML = '<option value="">获取失败</option>';
+    }
+}
+
+async function testAIConnection() {
+    const type = document.getElementById('ai-provider-type').value;
+    const apiKey = document.getElementById('ai-provider-apikey').value;
+    const baseUrl = document.getElementById('ai-provider-baseurl').value;
+    const model = document.getElementById('ai-provider-model').value;
+
+    if (!apiKey) {
+        showToast('请先输入 API Key');
+        return;
+    }
+
+    try {
+        showToast('正在测试连接...');
+        const result = await pywebview.api.test_ai_connection({
+            type,
+            config: {
+                api_key: apiKey,
+                base_url: baseUrl,
+                default_model: model || undefined
+            }
+        });
+
+        if (result.success) {
+            showToast(`连接成功！延迟: ${result.latency}s`);
+        } else {
+            showToast('连接失败: ' + result.error);
+        }
+    } catch (e) {
+        showToast('测试失败: ' + e.message);
+    }
+}
+
+async function saveAIProvider() {
+    const id = document.getElementById('ai-provider-id').value || `provider_${Date.now()}`;
+    const name = document.getElementById('ai-provider-name').value.trim();
+    const type = document.getElementById('ai-provider-type').value;
+    const apiKey = document.getElementById('ai-provider-apikey').value;
+    const baseUrl = document.getElementById('ai-provider-baseurl').value;
+    const model = document.getElementById('ai-provider-model').value;
+
+    if (!name) {
+        showToast('请输入名称');
+        return;
+    }
+    if (!apiKey) {
+        showToast('请输入 API Key');
+        return;
+    }
+
+    try {
+        const result = await pywebview.api.save_ai_provider({
+            id,
+            name,
+            type,
+            enabled: true,
+            config: {
+                api_key: apiKey,
+                base_url: baseUrl,
+                default_model: model
+            }
+        });
+
+        if (result.success) {
+            showToast('保存成功');
+            hideProviderForm();
+            await loadAIProvidersList();
+            await loadAIProviders();
+        } else {
+            showToast('保存失败: ' + result.error);
+        }
+    } catch (e) {
+        showToast('保存失败: ' + e.message);
+    }
+}
+
+async function editAIProvider(providerId) {
+    try {
+        const providers = await pywebview.api.get_ai_providers();
+        const provider = providers.find(p => p.id === providerId);
+        if (!provider) return;
+
+        document.getElementById('ai-provider-form').style.display = 'block';
+        document.getElementById('ai-provider-form-title').textContent = '编辑 AI 服务商';
+        document.getElementById('ai-provider-id').value = provider.id;
+        document.getElementById('ai-provider-name').value = provider.name;
+        document.getElementById('ai-provider-type').value = provider.type;
+        document.getElementById('ai-provider-apikey').value = provider.config?.api_key || '';
+        document.getElementById('ai-provider-baseurl').value = provider.config?.base_url || '';
+
+        const modelSelect = document.getElementById('ai-provider-model');
+        const currentModel = provider.config?.default_model;
+        if (currentModel) {
+            modelSelect.innerHTML = `<option value="${currentModel}">${currentModel}</option>`;
+        }
+    } catch (e) {
+        showToast('加载配置失败');
+    }
+}
+
+async function switchAIProvider(providerId) {
+    try {
+        await pywebview.api.switch_ai_provider(providerId);
+        showToast('已切换 AI 服务商');
+        await loadAIProvidersList();
+        await loadAIProviders();
+    } catch (e) {
+        showToast('切换失败: ' + e.message);
+    }
+}
+
+async function deleteAIProvider(providerId) {
+    if (!confirm('确定删除此 AI 服务商配置？')) return;
+
+    try {
+        const result = await pywebview.api.delete_ai_provider(providerId);
+        if (result.success) {
+            showToast('已删除');
+            await loadAIProvidersList();
+            await loadAIProviders();
+        } else {
+            showToast('删除失败: ' + result.error);
+        }
+    } catch (e) {
+        showToast('删除失败: ' + e.message);
+    }
+}

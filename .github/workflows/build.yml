@@ -5,6 +5,16 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 v1.0.0)，留空则只构建不发布'
+        required: false
+        type: string
+      create_release:
+        description: '是否创建 Release'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -13,13 +23,16 @@ jobs:
   build:
     name: Build
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            artifact: 牛牛待办-mac
+            artifact: moo_todo-macos
+            app_name: moo_todo-macos
             sep: ':'
           - os: windows-latest
-            artifact: 牛牛待办-win
+            artifact: moo_todo-windows
+            app_name: moo_todo-windows
             sep: ';'
 
     runs-on: ${{ matrix.os }}
@@ -33,11 +46,18 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pyinstaller pywebview
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Verify dependencies
+        run: |
+          python -c "import webview; print('pywebview OK:', webview.__version__)"
 
       - name: Build
         run: |
-          pyinstaller --onedir --windowed --name "牛牛待办" --add-data "web${{ matrix.sep }}web" --add-data "services${{ matrix.sep }}services" main.py
+          pyinstaller --onedir --windowed -y --name "${{ matrix.app_name }}" --hidden-import webview --hidden-import webview.platforms.cocoa --hidden-import webview.platforms.winforms --hidden-import webview.platforms.gtk --add-data "web${{ matrix.sep }}web" main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -49,9 +69,30 @@ jobs:
     name: Create Release
     needs: [build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.create_release && inputs.version != '')
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
+
+      - name: Create tag (if manual trigger)
+        if: github.event_name == 'workflow_dispatch' && inputs.create_release && inputs.version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -68,5 +109,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: artifacts/*.zip
           generate_release_notes: true

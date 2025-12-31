@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>牛牛待办</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.min.css">
+    <link rel="stylesheet" href="lib/uPlot.min.css">
 </head>
 <body>
     <div class="app">
@@ -140,6 +140,10 @@
                     <button class="btn btn-ghost btn-with-text" onclick="toggleStickyNotes()" title="便签 (S)">
                         <span class="btn-emoji">📌</span>
                         <span class="btn-label">便签</span>
+                    </button>
+                    <button class="btn btn-ghost btn-with-text" onclick="showAIChatModal()" title="AI 助手">
+                        <span class="btn-emoji">🤖</span>
+                        <span class="btn-label">AI</span>
                     </button>
                     <button class="btn btn-primary" onclick="showTaskModal()">
                         <span>+ 新任务</span>
@@ -426,14 +430,25 @@
                 </div>
 
                 <div class="settings-section">
+                    <h3 class="settings-title">🔍 界面缩放</h3>
+                    <div class="settings-row zoom-row">
+                        <label class="form-label">全局缩放</label>
+                        <div class="zoom-control">
+                            <input type="range" id="settings-zoom" class="zoom-slider" min="50" max="100" value="100" oninput="previewZoom(this.value)">
+                            <span class="zoom-value" id="zoom-value">100%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
                     <h3 class="settings-title">📦 数据管理</h3>
                     <div class="settings-row">
-                        <span class="settings-desc">导出所有数据为 JSON 文件</span>
+                        <span class="settings-desc">导出数据库文件 (.db)</span>
                         <button class="btn btn-sm" onclick="exportData()">导出数据</button>
                     </div>
                     <div class="settings-row">
-                        <span class="settings-desc">从 JSON 文件导入数据</span>
-                        <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(event)">
+                        <span class="settings-desc">从数据库文件导入数据</span>
+                        <input type="file" id="import-file" accept=".db" style="display:none" onchange="handleImportFile(event)">
                         <button class="btn btn-sm" onclick="document.getElementById('import-file').click()">导入数据</button>
                     </div>
                 </div>
@@ -458,21 +473,36 @@
 
                 <div class="settings-section">
                     <h3 class="settings-title">⌨️ 快捷键</h3>
-                    <div class="shortcuts-list">
-                        <div class="shortcut-item"><kbd>N</kbd> 新建任务</div>
-                        <div class="shortcut-item"><kbd>E</kbd> 编辑选中</div>
-                        <div class="shortcut-item"><kbd>Space</kbd> 完成/取消</div>
-                        <div class="shortcut-item"><kbd>↑↓</kbd> 选择任务</div>
-                        <div class="shortcut-item"><kbd>P</kbd> 番茄钟</div>
-                        <div class="shortcut-item"><kbd>S</kbd> 便签</div>
-                        <div class="shortcut-item"><kbd>1-4</kbd> 切换视图</div>
-                        <div class="shortcut-item"><kbd>/</kbd> 搜索</div>
+                    <div class="settings-row">
+                        <span class="settings-desc">自定义键盘快捷键</span>
+                        <button class="btn btn-sm" onclick="showShortcutsModal()">配置快捷键</button>
                     </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-ghost" onclick="closeModal('settings-modal')">取消</button>
                 <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 快捷键设置弹框 -->
+    <div id="shortcuts-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('shortcuts-modal')"></div>
+        <div class="modal-content modal-md">
+            <div class="modal-header">
+                <h2>⌨️ 快捷键设置</h2>
+                <button class="close-btn" onclick="closeModal('shortcuts-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="settings-desc" style="margin-bottom: 12px;">点击输入框后按下组合键进行设置（支持 Ctrl/Cmd + Alt + Shift 组合）</p>
+                <div class="shortcuts-config-list" id="shortcuts-config-list">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="resetShortcuts()">恢复默认</button>
+                <button class="btn btn-primary" onclick="saveShortcutsAndClose()">保存</button>
             </div>
         </div>
     </div>
@@ -581,6 +611,116 @@
         </div>
     </div>
 
+    <!-- AI 聊天弹窗 -->
+    <div id="ai-chat-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('ai-chat-modal')"></div>
+        <div class="modal-content modal-lg ai-chat-modal">
+            <div class="modal-header">
+                <h2>🤖 AI 助手</h2>
+                <div class="ai-chat-header-actions">
+                    <button class="btn btn-ghost btn-sm" onclick="showAISettingsModal()" title="AI 设置">⚙️</button>
+                    <button class="btn btn-ghost btn-sm" onclick="clearAIChat()" title="清空对话">🗑️</button>
+                    <button class="close-btn" onclick="closeModal('ai-chat-modal')">×</button>
+                </div>
+            </div>
+            <div class="modal-body ai-chat-body">
+                <div class="ai-chat-sessions">
+                    <div class="ai-sessions-header">
+                        <span>会话列表</span>
+                        <button class="btn btn-sm btn-primary" onclick="createAISession()">+ 新会话</button>
+                    </div>
+                    <div class="ai-sessions-list" id="ai-sessions-list"></div>
+                </div>
+                <div class="ai-chat-main">
+                    <div class="ai-chat-messages" id="ai-chat-messages">
+                        <div class="ai-chat-welcome">
+                            <div class="ai-welcome-icon">🤖</div>
+                            <div class="ai-welcome-text">你好！我是 AI 助手，有什么可以帮助你的吗？</div>
+                            <div class="ai-welcome-tips">
+                                <div class="ai-tip">💡 可以问我关于任务管理的建议</div>
+                                <div class="ai-tip">📝 帮你整理和规划待办事项</div>
+                                <div class="ai-tip">🎯 提供时间管理和效率提升技巧</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="ai-chat-input-area">
+                        <div class="ai-provider-indicator" id="ai-provider-indicator">
+                            <span class="ai-provider-dot"></span>
+                            <span class="ai-provider-name">未配置</span>
+                        </div>
+                        <div class="ai-chat-input-wrapper">
+                            <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入消息..." rows="1" onkeydown="handleAIChatKeydown(event)"></textarea>
+                            <button class="ai-send-btn" onclick="sendAIMessage()" id="ai-send-btn">
+                                <span class="ai-send-icon">➤</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 设置弹窗 -->
+    <div id="ai-settings-modal" class="modal">
+        <div class="modal-overlay" onclick="closeModal('ai-settings-modal')"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>🤖 AI 设置</h2>
+                <button class="close-btn" onclick="closeModal('ai-settings-modal')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="ai-providers-section">
+                    <div class="section-header">
+                        <h3>AI 服务商</h3>
+                        <button class="btn btn-sm btn-primary" onclick="showAddProviderForm()">+ 添加</button>
+                    </div>
+                    <div class="ai-providers-list" id="ai-providers-list"></div>
+                </div>
+                <div class="ai-provider-form" id="ai-provider-form" style="display:none">
+                    <h3 id="ai-provider-form-title">添加 AI 服务商</h3>
+                    <input type="hidden" id="ai-provider-id">
+                    <div class="form-group">
+                        <label class="form-label">名称</label>
+                        <input type="text" id="ai-provider-name" class="form-input" placeholder="例如：OpenAI">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">类型</label>
+                        <select id="ai-provider-type" class="form-input" onchange="onProviderTypeChange()">
+                            <option value="openai">OpenAI</option>
+                            <option value="claude">Claude (Anthropic)</option>
+                            <option value="openai-compatible">OpenAI 兼容 API</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">API Key</label>
+                        <input type="password" id="ai-provider-apikey" class="form-input" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Base URL</label>
+                        <input type="text" id="ai-provider-baseurl" class="form-input" placeholder="https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">默认模型</label>
+                        <div class="model-select-wrapper">
+                            <select id="ai-provider-model" class="form-input">
+                                <option value="">请先获取模型列表</option>
+                            </select>
+                            <button class="btn btn-sm" onclick="fetchAIModels()">获取模型</button>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-ghost" onclick="hideProviderForm()">取消</button>
+                        <button class="btn btn-sm" onclick="testAIConnection()">测试连接</button>
+                        <button class="btn btn-primary" onclick="saveAIProvider()">保存</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('ai-settings-modal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 成就解锁提示 -->
     <div id="achievement-toast" class="achievement-toast hidden">
         <div class="achievement-toast-content">
@@ -598,7 +738,7 @@
         <span class="toast-message" id="toast-message"></span>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.24/dist/uPlot.iife.min.js"></script>
+    <script src="lib/uPlot.iife.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

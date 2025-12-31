@@ -48,3 +48,4 @@ tests/
 test_*.py
 *_test.py
 *.test.js
+.ace-tool/

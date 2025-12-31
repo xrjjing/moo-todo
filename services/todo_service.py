@@ -1,13 +1,14 @@
 """
 Todo Service - 待办任务核心业务逻辑
 """
-import json
 import uuid
 from dataclasses import dataclass, asdict, field
 import calendar
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+
+from .db_manager import DatabaseManager
 
 
 def generate_unique_id(prefix: str = "") -> str:
@@ -77,12 +78,55 @@ class RecurrenceRule:
 
 
 @dataclass
+class Shortcut:
+    """快捷键配置"""
+    ctrl: bool = False
+    alt: bool = False
+    shift: bool = False
+    key: str = ""
+
+
+# 默认快捷键配置
+DEFAULT_SHORTCUTS: Dict[str, Dict[str, Any]] = {
+    "newTask": {"ctrl": True, "alt": False, "shift": False, "key": "n"},
+    "editTask": {"ctrl": True, "alt": False, "shift": False, "key": "e"},
+    "startPomodoro": {"ctrl": True, "alt": False, "shift": False, "key": "p"},
+    "toggleSticky": {"ctrl": True, "alt": False, "shift": False, "key": "b"},
+    "viewList": {"ctrl": True, "alt": False, "shift": False, "key": "1"},
+    "viewKanban": {"ctrl": True, "alt": False, "shift": False, "key": "2"},
+    "viewCalendar": {"ctrl": True, "alt": False, "shift": False, "key": "3"},
+    "viewQuadrant": {"ctrl": True, "alt": False, "shift": False, "key": "4"},
+    "focusSearch": {"ctrl": True, "alt": False, "shift": False, "key": "/"},
+    "toggleTaskStatus": {"ctrl": True, "alt": False, "shift": False, "key": " "},
+    "navigateUp": {"ctrl": False, "alt": False, "shift": False, "key": "ArrowUp"},
+    "navigateDown": {"ctrl": False, "alt": False, "shift": False, "key": "ArrowDown"},
+}
+
+# 快捷键动作名称映射
+SHORTCUT_LABELS: Dict[str, str] = {
+    "newTask": "新建任务",
+    "editTask": "编辑选中",
+    "startPomodoro": "番茄钟",
+    "toggleSticky": "便签",
+    "viewList": "列表视图",
+    "viewKanban": "看板视图",
+    "viewCalendar": "日历视图",
+    "viewQuadrant": "象限视图",
+    "focusSearch": "搜索",
+    "toggleTaskStatus": "完成/取消",
+    "navigateUp": "上移选择",
+    "navigateDown": "下移选择",
+}
+
+
+@dataclass
 class Settings:
     pomodoro_work: int = 25
     pomodoro_break: int = 5
     pomodoro_long_break: int = 15
     theme: str = "cute"
     default_view: str = "list"  # list | kanban | calendar | quadrant
+    zoom: int = 100  # 全局缩放 50-100%
     # 便签设置
     sticky_visible: bool = False
     sticky_opacity: float = 1.0
@@ -105,16 +149,16 @@ PRIORITY_COLORS = {
 class TodoService:
     def __init__(self, data_dir: str = ""):
         if data_dir:
-            self.data_dir = Path(data_dir)
+            self._data_dir = Path(data_dir)
         else:
-            self.data_dir = Path.home() / ".todo_app"
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._data_dir = Path.home() / ".todo_app"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        self.tasks_file = self.data_dir / "tasks.json"
-        self.categories_file = self.data_dir / "categories.json"
-        self.pomodoros_file = self.data_dir / "pomodoros.json"
-        self.settings_file = self.data_dir / "settings.json"
+        # 数据库路径
+        self._db_path = self._data_dir / "moo_todo.db"
+        self.db = DatabaseManager(self._db_path)
 
+        # 内存缓存
         self.tasks: List[Task] = []
         self.categories: List[Category] = []
         self.pomodoros: List[PomodoroRecord] = []
@@ -122,52 +166,75 @@ class TodoService:
 
         self._load_all()
 
-    # ===== 文件操作 =====
-    def _load_json(self, file: Path) -> List[Dict]:
-        if not file.exists():
-            return []
-        try:
-            return json.loads(file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            return []
-
-    def _save_json(self, file: Path, data: List):
-        payload = json.dumps(
-            [asdict(d) if hasattr(d, '__dataclass_fields__') else d for d in data],
-            ensure_ascii=False, indent=2
-        )
-        tmp_file = file.with_suffix(file.suffix + ".tmp")
-        tmp_file.write_text(payload, encoding="utf-8")
-        tmp_file.replace(file)
-
     def _load_all(self):
-        # 加载任务（处理子任务嵌套）
-        tasks_data = self._load_json(self.tasks_file)
+        """从数据库加载所有数据到内存"""
+        # 加载任务
+        tasks_data = self.db.get_all("tasks", order_by="order_index ASC")
         self.tasks = []
         for t in tasks_data:
-            subtasks_data = t.pop('subtasks', [])
-            task = Task(**t)
-            task.subtasks = [Subtask(**s) for s in subtasks_data] if subtasks_data else []
+            subtasks_data = self.db.get_all("subtasks", where="task_id = ?", params=(t["id"],), order_by="order_index ASC")
+            task = Task(
+                id=t["id"],
+                title=t["title"],
+                description=t.get("description", ""),
+                status=t.get("status", "not_started"),
+                priority=t.get("priority", "medium"),
+                quadrant=t.get("quadrant", ""),
+                category_id=t.get("category_id", ""),
+                due_date=t.get("due_date", ""),
+                tags=t.get("tags", []) if isinstance(t.get("tags"), list) else [],
+                recurrence=t.get("recurrence"),
+                parent_task_id=t.get("parent_task_id", ""),
+                created_at=t.get("created_at", ""),
+                completed_at=t.get("completed_at", ""),
+                pomodoro_count=t.get("pomodoro_count", 0),
+                order=t.get("order_index", 0)
+            )
+            task.subtasks = [Subtask(
+                id=s["id"],
+                title=s["title"],
+                completed=bool(s.get("completed")),
+                order=s.get("order_index", 0)
+            ) for s in subtasks_data]
             self.tasks.append(task)
 
         # 加载分类
-        categories_data = self._load_json(self.categories_file)
+        categories_data = self.db.get_all("categories", order_by="order_index ASC")
         if categories_data:
-            self.categories = [Category(**c) for c in categories_data]
+            self.categories = [Category(
+                id=c["id"],
+                name=c["name"],
+                icon=c.get("icon", "📁"),
+                color=c.get("color", "#C7CEEA"),
+                order=c.get("order_index", 0)
+            ) for c in categories_data]
         else:
             self._init_default_categories()
 
         # 加载番茄记录
-        pomodoros_data = self._load_json(self.pomodoros_file)
-        self.pomodoros = [PomodoroRecord(**p) for p in pomodoros_data]
+        pomodoros_data = self.db.get_all("pomodoros", order_by="started_at DESC")
+        self.pomodoros = [PomodoroRecord(
+            id=p["id"],
+            task_id=p["task_id"],
+            started_at=p["started_at"],
+            ended_at=p.get("ended_at", ""),
+            duration=p.get("duration", 25),
+            completed=bool(p.get("completed"))
+        ) for p in pomodoros_data]
 
         # 加载设置
-        if self.settings_file.exists():
-            try:
-                settings_data = json.loads(self.settings_file.read_text(encoding="utf-8"))
-                self.settings = Settings(**settings_data)
-            except (json.JSONDecodeError, IOError):
-                self.settings = Settings()
+        self.settings = Settings(
+            pomodoro_work=self.db.get_setting("pomodoro_work", 25),
+            pomodoro_break=self.db.get_setting("pomodoro_break", 5),
+            pomodoro_long_break=self.db.get_setting("pomodoro_long_break", 15),
+            theme=self.db.get_setting("theme", "cute"),
+            default_view=self.db.get_setting("default_view", "list"),
+            zoom=self.db.get_setting("zoom", 100),
+            sticky_visible=self.db.get_setting("sticky_visible", False),
+            sticky_opacity=self.db.get_setting("sticky_opacity", 1.0),
+            sticky_position_x=self.db.get_setting("sticky_position_x", 30),
+            sticky_position_y=self.db.get_setting("sticky_position_y", 30)
+        )
 
     def _init_default_categories(self):
         defaults = [
@@ -177,20 +244,63 @@ class TodoService:
             Category(id=generate_unique_id("cat"), name="其他", icon="📌", color="#6B7280", order=3),
         ]
         self.categories = defaults
-        self._save_json(self.categories_file, self.categories)
+        for c in defaults:
+            self.db.insert("categories", {
+                "id": c.id, "name": c.name, "icon": c.icon,
+                "color": c.color, "order_index": c.order
+            })
+
+    def _save_task(self, task: Task):
+        """保存单个任务到数据库"""
+        self.db.update("tasks", {
+            "title": task.title,
+            "description": task.description,
+            "status": task.status,
+            "priority": task.priority,
+            "quadrant": task.quadrant,
+            "category_id": task.category_id,
+            "due_date": task.due_date,
+            "tags": task.tags,
+            "recurrence": task.recurrence,
+            "parent_task_id": task.parent_task_id,
+            "pomodoro_count": task.pomodoro_count,
+            "order_index": task.order,
+            "completed_at": task.completed_at
+        }, "id = ?", (task.id,))
 
     def _save_tasks(self):
-        self._save_json(self.tasks_file, self.tasks)
+        """保存所有任务（批量更新）"""
+        for task in self.tasks:
+            self._save_task(task)
 
     def _save_categories(self):
-        self._save_json(self.categories_file, self.categories)
+        """保存所有分类"""
+        for c in self.categories:
+            self.db.update("categories", {
+                "name": c.name, "icon": c.icon,
+                "color": c.color, "order_index": c.order
+            }, "id = ?", (c.id,))
 
     def _save_pomodoros(self):
-        self._save_json(self.pomodoros_file, self.pomodoros)
+        """保存所有番茄记录"""
+        for p in self.pomodoros:
+            self.db.update("pomodoros", {
+                "ended_at": p.ended_at,
+                "completed": 1 if p.completed else 0
+            }, "id = ?", (p.id,))
 
     def _save_settings(self):
-        payload = json.dumps(asdict(self.settings), ensure_ascii=False, indent=2)
-        self.settings_file.write_text(payload, encoding="utf-8")
+        """保存设置"""
+        self.db.set_setting("pomodoro_work", self.settings.pomodoro_work)
+        self.db.set_setting("pomodoro_break", self.settings.pomodoro_break)
+        self.db.set_setting("pomodoro_long_break", self.settings.pomodoro_long_break)
+        self.db.set_setting("theme", self.settings.theme)
+        self.db.set_setting("default_view", self.settings.default_view)
+        self.db.set_setting("zoom", self.settings.zoom)
+        self.db.set_setting("sticky_visible", self.settings.sticky_visible)
+        self.db.set_setting("sticky_opacity", self.settings.sticky_opacity)
+        self.db.set_setting("sticky_position_x", self.settings.sticky_position_x)
+        self.db.set_setting("sticky_position_y", self.settings.sticky_position_y)
 
     # ===== Task CRUD =====
     def add_task(self, title: str, description: str = "", priority: str = "medium",
@@ -220,7 +330,23 @@ class TodoService:
             order=max_order + 1
         )
         self.tasks.append(task)
-        self._save_tasks()
+        self.db.insert("tasks", {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status,
+            "priority": task.priority,
+            "quadrant": task.quadrant,
+            "category_id": task.category_id,
+            "due_date": task.due_date,
+            "tags": task.tags,
+            "recurrence": task.recurrence,
+            "parent_task_id": task.parent_task_id,
+            "pomodoro_count": task.pomodoro_count,
+            "order_index": task.order,
+            "created_at": task.created_at,
+            "completed_at": task.completed_at
+        })
         return task
 
     def update_task(self, task_id: str, **kwargs) -> Optional[Task]:
@@ -246,7 +372,7 @@ class TodoService:
         elif task.status != "completed":
             task.completed_at = ""
 
-        self._save_tasks()
+        self._save_task(task)
         return task
 
     def delete_task(self, task_id: str) -> bool:
@@ -256,8 +382,9 @@ class TodoService:
         self.tasks.remove(task)
         # 删除关联的番茄记录
         self.pomodoros = [p for p in self.pomodoros if p.task_id != task_id]
-        self._save_tasks()
-        self._save_pomodoros()
+        # 从数据库删除（子任务和番茄记录会级联删除）
+        self.db.delete("tasks", "id = ?", (task_id,))
+        self.db.delete("pomodoros", "task_id = ?", (task_id,))
         return True
 
     def get_task(self, task_id: str) -> Optional[Task]:
@@ -375,7 +502,13 @@ class TodoService:
             order=max_order + 1
         )
         task.subtasks.append(subtask)
-        self._save_tasks()
+        self.db.insert("subtasks", {
+            "id": subtask.id,
+            "task_id": task_id,
+            "title": subtask.title,
+            "completed": 0,
+            "order_index": subtask.order
+        })
         return subtask
 
     def update_subtask(self, task_id: str, subtask_id: str, **kwargs) -> Optional[Subtask]:
@@ -391,7 +524,11 @@ class TodoService:
                 if key == "title" and (not value or not str(value).strip()):
                     continue
                 setattr(subtask, key, value)
-        self._save_tasks()
+        self.db.update("subtasks", {
+            "title": subtask.title,
+            "completed": 1 if subtask.completed else 0,
+            "order_index": subtask.order
+        }, "id = ?", (subtask_id,))
         return subtask
 
     def delete_subtask(self, task_id: str, subtask_id: str) -> bool:
@@ -402,7 +539,7 @@ class TodoService:
         if not subtask:
             return False
         task.subtasks.remove(subtask)
-        self._save_tasks()
+        self.db.delete("subtasks", "id = ?", (subtask_id,))
         return True
 
     def toggle_subtask(self, task_id: str, subtask_id: str) -> Optional[Subtask]:
@@ -413,7 +550,7 @@ class TodoService:
         if not subtask:
             return None
         subtask.completed = not subtask.completed
-        self._save_tasks()
+        self.db.update("subtasks", {"completed": 1 if subtask.completed else 0}, "id = ?", (subtask_id,))
         return subtask
 
     def reorder_subtasks(self, task_id: str, subtask_ids: List[str]) -> bool:
@@ -424,8 +561,8 @@ class TodoService:
         for i, sid in enumerate(subtask_ids):
             if sid in subtask_map:
                 subtask_map[sid].order = i
+                self.db.update("subtasks", {"order_index": i}, "id = ?", (sid,))
         task.subtasks.sort(key=lambda s: s.order)
-        self._save_tasks()
         return True
 
     def get_subtask_progress(self, task_id: str) -> Dict[str, int]:
@@ -445,7 +582,7 @@ class TodoService:
         if not task.due_date:
             raise ValueError("设置重复规则前必须先设置截止日期")
         task.recurrence = self._normalize_recurrence_rule(rule)
-        self._save_tasks()
+        self._save_task(task)
         return task
 
     def clear_recurrence(self, task_id: str) -> Optional[Task]:
@@ -454,7 +591,7 @@ class TodoService:
         if not task:
             return None
         task.recurrence = None
-        self._save_tasks()
+        self._save_task(task)
         return task
 
     def _normalize_recurrence_rule(self, rule: dict) -> dict:
@@ -680,7 +817,13 @@ class TodoService:
             order=max_order + 1
         )
         self.categories.append(category)
-        self._save_categories()
+        self.db.insert("categories", {
+            "id": category.id,
+            "name": category.name,
+            "icon": category.icon,
+            "color": category.color,
+            "order_index": category.order
+        })
         return category
 
     def update_category(self, category_id: str, **kwargs) -> Optional[Category]:
@@ -690,7 +833,12 @@ class TodoService:
         for key, value in kwargs.items():
             if hasattr(category, key):
                 setattr(category, key, value)
-        self._save_categories()
+        self.db.update("categories", {
+            "name": category.name,
+            "icon": category.icon,
+            "color": category.color,
+            "order_index": category.order
+        }, "id = ?", (category_id,))
         return category
 
     def delete_category(self, category_id: str) -> bool:
@@ -702,8 +850,8 @@ class TodoService:
         for task in self.tasks:
             if task.category_id == category_id:
                 task.category_id = ""
-        self._save_categories()
-        self._save_tasks()
+                self._save_task(task)
+        self.db.delete("categories", "id = ?", (category_id,))
         return True
 
     def get_category(self, category_id: str) -> Optional[Category]:
@@ -729,7 +877,14 @@ class TodoService:
             completed=False
         )
         self.pomodoros.append(record)
-        self._save_pomodoros()
+        self.db.insert("pomodoros", {
+            "id": record.id,
+            "task_id": record.task_id,
+            "started_at": record.started_at,
+            "ended_at": record.ended_at,
+            "duration": record.duration,
+            "completed": 0
+        })
         return record
 
     def complete_pomodoro(self, pomodoro_id: str) -> Optional[PomodoroRecord]:
@@ -741,8 +896,11 @@ class TodoService:
                 task = self.get_task(record.task_id)
                 if task:
                     task.pomodoro_count += 1
-                    self._save_tasks()
-                self._save_pomodoros()
+                    self._save_task(task)
+                self.db.update("pomodoros", {
+                    "ended_at": record.ended_at,
+                    "completed": 1
+                }, "id = ?", (pomodoro_id,))
                 return record
         return None
 
@@ -751,7 +909,10 @@ class TodoService:
             if record.id == pomodoro_id:
                 record.ended_at = datetime.now().isoformat()
                 record.completed = False
-                self._save_pomodoros()
+                self.db.update("pomodoros", {
+                    "ended_at": record.ended_at,
+                    "completed": 0
+                }, "id = ?", (pomodoro_id,))
                 return True
         return False
 
@@ -925,49 +1086,72 @@ class TodoService:
         self.settings.theme = theme
         self._save_settings()
 
+    def get_zoom(self) -> int:
+        return self.settings.zoom
+
+    def save_zoom(self, zoom: int):
+        self.settings.zoom = max(50, min(100, zoom))
+        self._save_settings()
+
+    # ===== 快捷键 =====
+    def get_shortcuts(self) -> Dict[str, Any]:
+        """获取快捷键配置"""
+        saved = self.db.get_setting("shortcuts", None)
+        if saved and isinstance(saved, dict):
+            merged = DEFAULT_SHORTCUTS.copy()
+            merged.update(saved)
+            return {"shortcuts": merged, "labels": SHORTCUT_LABELS}
+        return {"shortcuts": DEFAULT_SHORTCUTS.copy(), "labels": SHORTCUT_LABELS}
+
+    def save_shortcuts(self, shortcuts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """保存快捷键配置"""
+        self.db.set_setting("shortcuts", shortcuts)
+        return {"success": True}
+
+    def reset_shortcuts(self) -> Dict[str, Any]:
+        """重置快捷键为默认值"""
+        self.db.set_setting("shortcuts", DEFAULT_SHORTCUTS.copy())
+        return {"shortcuts": DEFAULT_SHORTCUTS.copy(), "labels": SHORTCUT_LABELS}
+
     # ===== 数据导出/导入 =====
-    def export_data(self) -> Dict[str, Any]:
-        return {
-            "version": "1.0",
-            "exported_at": datetime.now().isoformat(),
-            "data": {
-                "tasks": [asdict(t) for t in self.tasks],
-                "categories": [asdict(c) for c in self.categories],
-                "pomodoros": [asdict(p) for p in self.pomodoros],
-                "settings": asdict(self.settings)
-            }
-        }
+    def get_db_path(self) -> str:
+        """获取数据库文件路径"""
+        return str(self._db_path)
 
-    def import_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def export_db(self, export_path: str) -> Dict[str, Any]:
+        """导出数据库文件"""
+        import shutil
         try:
-            imported = {"tasks": 0, "categories": 0, "pomodoros": 0}
-
-            if "data" in data:
-                inner = data["data"]
-                if "tasks" in inner:
-                    self.tasks = []
-                    for t in inner["tasks"]:
-                        subtasks_data = t.pop('subtasks', [])
-                        task = Task(**t)
-                        task.subtasks = [Subtask(**s) for s in subtasks_data] if subtasks_data else []
-                        self.tasks.append(task)
-                    imported["tasks"] = len(self.tasks)
-                if "categories" in inner:
-                    self.categories = [Category(**c) for c in inner["categories"]]
-                    imported["categories"] = len(self.categories)
-                if "pomodoros" in inner:
-                    self.pomodoros = [PomodoroRecord(**p) for p in inner["pomodoros"]]
-                    imported["pomodoros"] = len(self.pomodoros)
-                if "settings" in inner:
-                    self.settings = Settings(**inner["settings"])
-
-            self._save_tasks()
-            self._save_categories()
-            self._save_pomodoros()
-            self._save_settings()
-
-            return {"success": True, "imported": imported}
+            shutil.copy2(str(self._db_path), export_path)
+            return {"success": True, "path": export_path}
         except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def import_db(self, import_path: str) -> Dict[str, Any]:
+        """导入数据库文件"""
+        import shutil
+        from pathlib import Path
+        try:
+            import_file = Path(import_path)
+            if not import_file.exists():
+                return {"success": False, "error": "文件不存在"}
+            if not import_file.suffix == '.db':
+                return {"success": False, "error": "文件格式错误，请选择 .db 文件"}
+
+            backup_path = self._db_path.with_suffix('.db.bak')
+            shutil.copy2(str(self._db_path), str(backup_path))
+
+            shutil.copy2(import_path, str(self._db_path))
+
+            self.db = DatabaseManager(self._db_path)
+            self._load_all()
+
+            return {"success": True}
+        except Exception as e:
+            if backup_path.exists():
+                shutil.copy2(str(backup_path), str(self._db_path))
+                self.db = DatabaseManager(self._db_path)
+                self._load_all()
             return {"success": False, "error": str(e)}
 
     def get_data_stats(self) -> Dict[str, int]:
@@ -1014,20 +1198,16 @@ class TodoService:
 
     def _load_achievements(self) -> Dict[str, Any]:
         """加载成就数据"""
-        path = self.data_dir / "achievements.json"
-        if path.exists():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except:
-                pass
-        return {"unlocked": {}, "progress": {}, "streak_data": {"current": 0, "last_date": ""}}
+        unlocked = {}
+        achievements_data = self.db.get_all("achievements")
+        for a in achievements_data:
+            unlocked[a["id"]] = a["unlocked_at"]
+        return {"unlocked": unlocked, "progress": {}, "streak_data": {"current": 0, "last_date": ""}}
 
     def _save_achievements(self, data: Dict[str, Any]):
         """保存成就数据"""
-        path = self.data_dir / "achievements.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 成就数据已在 check_achievements 中直接写入数据库
+        pass
 
     def get_achievements(self) -> Dict[str, Any]:
         """获取所有成就及进度"""
@@ -1135,8 +1315,6 @@ class TodoService:
                     "unlocked_at": now,
                     "tier_color": self.TIER_COLORS.get(info["tier"], "#888")
                 })
-
-        if newly_unlocked:
-            self._save_achievements(data)
+                self.db.insert("achievements", {"id": aid, "unlocked_at": now})
 
         return newly_unlocked
