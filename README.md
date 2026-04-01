@@ -82,6 +82,20 @@ pip install -r requirements.txt
 python main.py
 ```
 
+
+## 🔧 开发调试模式
+
+```bash
+# 开启开发者工具，并监听 web 目录变化后自动刷新页面
+python main.py -d -w
+```
+
+说明：
+- `-d`：启用 pywebview 调试模式，方便查看前端页面调试信息
+- `-w`：监听 `web/` 下的 HTML / CSS / JS 变更并自动刷新页面
+- 开启后右下角会显示开发提示，并提供“立即刷新”按钮
+- 也支持使用 `F5` 或 `Ctrl/Cmd + Shift + R` 手动刷新
+
 ## 📦 打包
 
 ```bash
