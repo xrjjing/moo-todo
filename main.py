@@ -15,6 +15,7 @@
 - 前端能打开但接口全失效：先看 `Api()` 是否成功创建并传给 `js_api`。
 - 打包后资源缺失：再联动检查 `build.py` / PyInstaller 的 `add-data` 配置。
 """
+import argparse
 import webview
 import sys
 from pathlib import Path
@@ -25,13 +26,31 @@ sys.path.insert(0, str(Path(__file__).parent))
 from api import Api
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="牛牛待办")
+    parser.add_argument(
+        "-d", "--debug", action="store_true", help="启用调试模式（允许打开开发者工具）"
+    )
+    parser.add_argument(
+        "--watch-web",
+        action="store_true",
+        help="开发模式：监听 web 目录变化并自动刷新前端页面",
+    )
+    return parser.parse_args()
+
+
 def main():
     """应用主启动流程。"""
-    # 这里是 Python 侧真正的装配点：先准备桥接对象，再创建窗口。
-    api = Api()
+    args = parse_args()
+    debug_mode = args.debug
 
-    # `web` 目录承载整个前端静态页面；这里只负责把入口 HTML 暴露给 pywebview。
+    # 这里是 Python 侧真正的装配点：先准备桥接对象，再创建窗口。
     web_dir = Path(__file__).parent / "web"
+    api = Api(
+        debug_mode=debug_mode,
+        web_dir=web_dir,
+        watch_web=args.watch_web,
+    )
 
     # `js_api=api` 是前后端桥接的关键配置。
     # 页面里的 `window.pywebview.api.xxx()` 最终都会落到 `api.py` 的同名方法上。
@@ -44,9 +63,10 @@ def main():
         js_api=api,
         text_select=True
     )
+    api.set_window(window)
 
     # 进入桌面应用事件循环。若要排查启动阶段白屏/崩溃，这里和 create_window 参数是首要入口。
-    webview.start(debug=False)
+    webview.start(debug=debug_mode)
     sys.exit()
 
 

@@ -49,6 +49,13 @@ const state = {
     editingShortcut: null
 };
 
+// ===== 开发模式前端自动刷新 =====
+// 由 Python 后端监听 web 目录并主动推送事件；前端只负责接收并整页刷新。
+const FRONTEND_RELOAD_EVENT_NAME = 'moo:frontend-reload';
+let frontendReloadVersion = null;
+let frontendHotReloadEnabled = false;
+let frontendHotReloadBridgeStarted = false;
+
 // ===== 工具函数 =====
 function escapeHtml(text) {
     if (text === null || text === undefined) return '';
@@ -89,6 +96,7 @@ function getLocalDateStr() {
 // 4. 最后初始化拖拽、快捷键、便签等增强交互。
 document.addEventListener('DOMContentLoaded', async () => {
     await waitForApi();
+    await startFrontendHotReloadBridge();
     initTheme();
     initZoom();
     initViewSwitcher();
@@ -115,6 +123,82 @@ async function waitForApi() {
     while (!window.pywebview?.api) {
         await new Promise(r => setTimeout(r, 50));
     }
+}
+
+async function startFrontendHotReloadBridge() {
+    if (frontendHotReloadBridgeStarted) return;
+    const apiReady = await waitForFrontendReloadApi();
+    if (!apiReady) return;
+
+    const first = await window.pywebview.api.get_frontend_reload_version();
+    if (!first || !first.enabled) return;
+
+    frontendHotReloadBridgeStarted = true;
+    frontendHotReloadEnabled = true;
+    frontendReloadVersion = first.version;
+    ensureFrontendDevBadge();
+    window.addEventListener(FRONTEND_RELOAD_EVENT_NAME, handleFrontendReloadEvent);
+}
+
+async function waitForFrontendReloadApi(timeoutMs = 15000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        if (
+            window.pywebview?.api
+            && typeof window.pywebview.api.get_frontend_reload_version === 'function'
+        ) {
+            return true;
+        }
+        await new Promise(r => setTimeout(r, 50));
+    }
+    console.warn('[dev] 前端自动刷新桥接未就绪，已跳过');
+    return false;
+}
+
+function handleFrontendReloadEvent(event) {
+    const nextVersion = event?.detail?.version;
+    if (!frontendHotReloadEnabled || !nextVersion) return;
+    if (frontendReloadVersion && nextVersion === frontendReloadVersion) return;
+
+    frontendReloadVersion = nextVersion;
+    reloadFrontendNow('hot');
+}
+
+function reloadFrontendNow(reason = 'manual') {
+    console.log(`[dev] 前端刷新触发，原因: ${reason}`);
+    const url = new URL(window.location.href);
+    url.searchParams.set('__dev_reload', frontendReloadVersion || String(Date.now()));
+    window.location.replace(url.toString());
+}
+
+function ensureFrontendDevBadge() {
+    if (document.getElementById('frontend-dev-badge')) return;
+
+    const badge = document.createElement('div');
+    badge.id = 'frontend-dev-badge';
+    badge.style.cssText = [
+        'position:fixed',
+        'right:12px',
+        'bottom:12px',
+        'z-index:100001',
+        'display:flex',
+        'align-items:center',
+        'gap:8px',
+        'padding:8px 10px',
+        'border-radius:999px',
+        'background:rgba(16,185,129,0.92)',
+        'color:#062b1f',
+        'font-size:12px',
+        'font-weight:600',
+        'box-shadow:0 6px 18px rgba(0,0,0,0.22)',
+    ].join(';');
+    badge.innerHTML = [
+        '<span>DEV 自动刷新已开启</span>',
+        '<button type="button" id="frontend-dev-badge-refresh" style="border:none;border-radius:999px;padding:4px 8px;background:rgba(255,255,255,0.78);color:#062b1f;cursor:pointer;font-size:12px;font-weight:600;">立即刷新</button>',
+    ].join('');
+    document.body.appendChild(badge);
+    document.getElementById('frontend-dev-badge-refresh')
+        ?.addEventListener('click', () => reloadFrontendNow('badge'));
 }
 
 // ===== 主题系统 =====
@@ -1049,6 +1133,17 @@ async function initKeyboardShortcuts() {
 
 // 快捷键在输入框、弹窗激活时会适当让位，避免误触影响表单输入。
 function handleKeyboardShortcut(e) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        reloadFrontendNow('shortcut');
+        return;
+    }
+    if (e.key === 'F5') {
+        e.preventDefault();
+        reloadFrontendNow('shortcut');
+        return;
+    }
+
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
         return;
     }
