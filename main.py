@@ -32,7 +32,7 @@ def parse_args():
         "-d", "--debug", action="store_true", help="启用调试模式（允许打开开发者工具）"
     )
     parser.add_argument(
-        "--watch-web",
+        "-w", "--watch-web",
         action="store_true",
         help="开发模式：监听 web 目录变化并自动刷新前端页面",
     )
