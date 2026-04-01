@@ -2,6 +2,13 @@
 """
 AI Provider 实现
 支持 OpenAI、Claude、第三方兼容 API
+
+模块定位：
+- 上游：`AIManager`
+- 下游：各家真实 HTTP API
+
+这一层的职责是把“统一消息结构”翻译成不同服务商所需的请求格式，
+尽量把差异隔离在 Provider 内部，不让上层聊天逻辑感知太多实现细节。
 """
 
 import httpx
@@ -14,7 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 class AIProvider:
-    """AI 提供商基类"""
+    """AI 提供商基类。
+
+    约定：
+    - `chat()` 返回完整文本；
+    - `chat_stream()` 逐块产出文本；
+    - `validate_config()` 只做最基础的配置可用性判断。
+    """
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -23,21 +36,24 @@ class AIProvider:
         self.provider_name = config.get('name')
 
     async def chat(self, messages: List[Dict], **kwargs) -> str:
-        """同步对话接口"""
+        """完整返回式对话接口。"""
         raise NotImplementedError("子类必须实现 chat 方法")
 
     async def chat_stream(self, messages: List[Dict], **kwargs) -> AsyncIterator[str]:
-        """流式对话接口"""
+        """流式对话接口。"""
         raise NotImplementedError("子类必须实现 chat_stream 方法")
 
     def validate_config(self) -> bool:
-        """验证配置有效性"""
+        """验证配置有效性。"""
         config_dict = self.config.get('config', {})
         return bool(config_dict.get('api_key'))
 
 
 class OpenAIProvider(AIProvider):
-    """OpenAI 官方 API Provider"""
+    """OpenAI 官方 API Provider。
+
+    负责把统一消息数组直接映射到 `/chat/completions` 协议。
+    """
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -53,7 +69,7 @@ class OpenAIProvider(AIProvider):
         self.timeout = config.get('config', {}).get('timeout', 120)
 
     def _build_headers(self) -> Dict[str, str]:
-        """构建请求头"""
+        """构建请求头。"""
         if not self.api_key:
             raise ValueError("未配置 OpenAI API Key")
 
@@ -68,7 +84,7 @@ class OpenAIProvider(AIProvider):
         return headers
 
     async def chat(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> str:
-        """对话接口"""
+        """一次性获取完整回复。"""
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         headers = self._build_headers()
 
@@ -86,7 +102,10 @@ class OpenAIProvider(AIProvider):
             return data['choices'][0]['message']['content']
 
     async def chat_stream(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> AsyncIterator[str]:
-        """流式响应"""
+        """流式响应。
+
+        若前端未来要支持逐 token 输出，这里就是需要继续向上打通的底层能力。
+        """
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         headers = self._build_headers()
 
@@ -119,7 +138,10 @@ class OpenAIProvider(AIProvider):
 
 
 class ClaudeProvider(AIProvider):
-    """Claude (Anthropic) API Provider"""
+    """Claude (Anthropic) API Provider。
+
+    由于 Claude 的 Messages API 与 OpenAI 协议不同，所以这里额外承担消息格式转换。
+    """
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -130,7 +152,12 @@ class ClaudeProvider(AIProvider):
         self.timeout = config.get('config', {}).get('timeout', 60)
 
     def _convert_messages(self, openai_messages: List[Dict]) -> tuple:
-        """转换 OpenAI 格式消息为 Claude 格式"""
+        """把统一消息格式转换成 Claude 所需格式。
+
+        核心差异：
+        - system prompt 需要单独提取
+        - user / assistant 消息列表单独传入 `messages`
+        """
         system_prompt = None
         claude_messages = []
 
@@ -146,7 +173,7 @@ class ClaudeProvider(AIProvider):
         return system_prompt, claude_messages
 
     async def chat(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> str:
-        """Claude Messages API"""
+        """调用 Claude Messages API 并返回完整文本。"""
         base = self.base_url.rstrip('/')
         if base.endswith('/v1/messages') or base.endswith('/messages'):
             url = base
@@ -203,7 +230,7 @@ class ClaudeProvider(AIProvider):
             return ""
 
     async def chat_stream(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> AsyncIterator[str]:
-        """Claude 流式响应"""
+        """Claude 流式响应。"""
         base = self.base_url.rstrip('/')
         if base.endswith('/v1/messages') or base.endswith('/messages'):
             url = base
@@ -269,7 +296,10 @@ class ClaudeProvider(AIProvider):
 
 
 class ThirdPartyProvider(AIProvider):
-    """第三方 OpenAI 兼容 API Provider"""
+    """第三方 OpenAI 兼容 API Provider。
+
+    适用于各种“接口兼容 OpenAI，但认证头、路径或 SSL 行为有差异”的服务商。
+    """
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -287,7 +317,7 @@ class ThirdPartyProvider(AIProvider):
         self.verify_ssl = compat.get('verify_ssl', True)
 
     async def chat(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> str:
-        """第三方兼容 API"""
+        """请求第三方兼容接口并返回完整文本。"""
         if not self.base_url:
             raise ValueError("未配置 base_url")
 
@@ -323,7 +353,7 @@ class ThirdPartyProvider(AIProvider):
                     raise ValueError(f"无法解析响应格式，可用字段: {keys}")
 
     async def chat_stream(self, messages: List[Dict], model: Optional[str] = None, **kwargs) -> AsyncIterator[str]:
-        """第三方兼容 API 流式响应"""
+        """第三方兼容 API 流式响应。"""
         if not self.base_url:
             raise ValueError("未配置 base_url")
 
@@ -372,7 +402,11 @@ class ThirdPartyProvider(AIProvider):
 
 
 def create_provider(config: Dict[str, Any]) -> AIProvider:
-    """工厂方法：根据配置创建对应的 Provider"""
+    """工厂方法：根据配置创建对应的 Provider。
+
+    这是 `AIManager` 与具体 Provider 实现解耦的关键点。
+    如果未来增加新的服务商类型，通常先从这里扩分支。
+    """
     provider_type = config.get('type')
 
     if provider_type == 'openai':

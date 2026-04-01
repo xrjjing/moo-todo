@@ -1,6 +1,14 @@
 """
-SQLite 数据库管理模块
-统一管理所有数据的增删改查操作
+SQLite 持久化访问层。
+
+职责定位：
+1. 初始化本地数据库与全部表结构。
+2. 封装通用 CRUD，给 `TodoService` / `AIManager` 提供统一的数据读写入口。
+3. 负责 JSON 字段序列化、设置项读写、活跃配置读写。
+
+在当前项目里的定位：
+- 这是最底层的数据访问模块，上层不直接写原始 sqlite3 语句时，通常都会经过这里。
+- 如果前端某个功能“内存里看起来对、重启后丢失”，优先检查这里是否真正写入成功。
 """
 import sqlite3
 import json
@@ -13,7 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    """数据库管理器"""
+    """数据库管理器。
+
+    调用链位置：
+    - `main.py` 不直接接数据库；
+    - `Api` -> `TodoService` / `AIManager` -> `DatabaseManager`
+
+    排查建议：
+    - 表结构问题：先看 `_init_database()`
+    - JSON 字段读写异常：看 `_serialize_json_fields()` / `_deserialize_json_fields()`
+    - 设置项丢失：看 `set_setting()` / `set_active_config()`
+    """
 
     VERSION = "1.0.0"
 
@@ -23,14 +41,26 @@ class DatabaseManager:
         self._init_database()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """获取数据库连接"""
+        """获取数据库连接。
+
+        每次调用都新建连接，适合桌面应用这种本地轻量读写场景，也能减少长连接状态污染。
+        """
         conn = sqlite3.connect(str(self._db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_database(self):
-        """初始化数据库表结构"""
+        """初始化数据库表结构。
+
+        这里是当前项目数据模型的真实落点：
+        - tasks / subtasks / categories / pomodoros：待办核心域
+        - settings / active_config：用户偏好与当前生效配置
+        - achievements：成就解锁记录
+        - ai_providers / chat_sessions / chat_messages：AI 配置与会话域
+
+        若启动后某个功能报“表不存在/列不存在”，优先从这里核对。
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -205,7 +235,10 @@ class DatabaseManager:
             conn.close()
 
     def _migrate_add_column(self, cursor, table: str, column: str, col_type: str, default: str = None):
-        """安全地为表添加新列"""
+        """安全地为表添加新列。
+
+        当前代码里暂未看到显式迁移流程大量使用它，但它是后续平滑升级表结构的预留能力。
+        """
         cursor.execute(f"PRAGMA table_info({table})")
         columns = [row[1] for row in cursor.fetchall()]
         if column not in columns:
@@ -216,7 +249,10 @@ class DatabaseManager:
     # ========== 通用 CRUD ==========
 
     def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
-        """执行查询"""
+        """执行查询并返回字典列表。
+
+        这里不做业务判断，只负责 SQL 执行；结果解释交给上层 Service。
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -227,7 +263,7 @@ class DatabaseManager:
             conn.close()
 
     def execute_update(self, query: str, params: tuple = ()) -> int:
-        """执行更新"""
+        """执行写操作并返回受影响行数。"""
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -242,7 +278,10 @@ class DatabaseManager:
             conn.close()
 
     def insert(self, table: str, data: Dict[str, Any]) -> bool:
-        """插入数据"""
+        """插入单条记录。
+
+        上层可以直接传 dict/list 字段，这里会统一序列化为 JSON 文本。
+        """
         data = self._serialize_json_fields(data)
         columns = ', '.join(data.keys())
         placeholders = ', '.join(['?' for _ in data])
@@ -256,7 +295,10 @@ class DatabaseManager:
             return False
 
     def update(self, table: str, data: Dict[str, Any], where: str, params: tuple = ()) -> bool:
-        """更新数据"""
+        """更新记录。
+
+        若前端表现“修改后刷新又恢复旧值”，这里是首个需要确认是否写成功的位置。
+        """
         data = self._serialize_json_fields(data)
         set_clause = ', '.join([f"{k} = ?" for k in data.keys()])
         query = f"UPDATE {table} SET {set_clause} WHERE {where}"
@@ -269,7 +311,7 @@ class DatabaseManager:
             return False
 
     def delete(self, table: str, where: str, params: tuple = ()) -> bool:
-        """删除数据"""
+        """删除记录。"""
         query = f"DELETE FROM {table} WHERE {where}"
         try:
             self.execute_update(query, params)
@@ -279,7 +321,7 @@ class DatabaseManager:
             return False
 
     def get_by_id(self, table: str, id_value: str, id_column: str = 'id') -> Optional[Dict[str, Any]]:
-        """根据 ID 获取单条记录"""
+        """根据主键或指定字段获取单条记录。"""
         query = f"SELECT * FROM {table} WHERE {id_column} = ?"
         results = self.execute_query(query, (id_value,))
         if results:
@@ -287,7 +329,7 @@ class DatabaseManager:
         return None
 
     def get_all(self, table: str, where: str = "", params: tuple = (), order_by: str = "") -> List[Dict[str, Any]]:
-        """获取所有记录"""
+        """获取记录列表，并在返回前统一反序列化 JSON 字段。"""
         query = f"SELECT * FROM {table}"
         if where:
             query += f" WHERE {where}"
@@ -299,7 +341,10 @@ class DatabaseManager:
     # ========== JSON 序列化 ==========
 
     def _serialize_json_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """将字典/列表字段序列化为 JSON 字符串"""
+        """将字典/列表字段序列化为 JSON 字符串。
+
+        这样上层 Service 可以直接使用 Python 原生结构，不需要关心 SQLite 中如何存储。
+        """
         result = {}
         for key, value in data.items():
             if isinstance(value, (dict, list)):
@@ -309,7 +354,10 @@ class DatabaseManager:
         return result
 
     def _deserialize_json_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """将 JSON 字符串字段反序列化"""
+        """将 JSON 字符串字段反序列化。
+
+        当前会被自动处理的字段包括 Provider 配置、AI 消息元信息、任务标签、重复规则等。
+        """
         result = dict(data)
         json_fields = ['config', 'capabilities', 'stats', 'tags', 'recurrence', 'meta', 'metadata']
 
@@ -324,7 +372,7 @@ class DatabaseManager:
     # ========== 设置相关 ==========
 
     def get_setting(self, key: str, default: Any = None) -> Any:
-        """获取设置"""
+        """获取通用设置项。"""
         row = self.get_by_id("settings", key, "key")
         if not row:
             return default
@@ -335,7 +383,10 @@ class DatabaseManager:
             return value
 
     def set_setting(self, key: str, value: Any) -> bool:
-        """设置配置"""
+        """写入通用设置项。
+
+        主题、缩放、快捷键等用户偏好最终都会落到这张表。
+        """
         try:
             json_value = json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError) as e:
@@ -362,7 +413,10 @@ class DatabaseManager:
     # ========== 活跃配置 ==========
 
     def get_active_config(self, key: str, default: Any = None) -> Any:
-        """获取活跃配置"""
+        """获取“当前生效”的配置项。
+
+        与 `settings` 的区别是：这里更偏向运行态指针，比如当前启用的 AI Provider。
+        """
         row = self.get_by_id("active_config", key, "key")
         if not row:
             return default
@@ -373,7 +427,7 @@ class DatabaseManager:
             return value
 
     def set_active_config(self, key: str, value: Any) -> bool:
-        """设置活跃配置"""
+        """设置“当前生效”的配置项。"""
         try:
             json_value = json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError):

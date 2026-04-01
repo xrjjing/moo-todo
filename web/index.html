@@ -8,9 +8,20 @@
     <link rel="stylesheet" href="lib/uPlot.min.css">
 </head>
 <body>
+    <!--
+        页面总览：
+        - 这是当前桌面应用唯一的主页面模板，所有主工作区、弹窗和悬浮层都集中定义在这里。
+        - 页面真实交互由 `web/app.js` 驱动；页面加载完成后，JS 会等待 `window.pywebview.api` 就绪，再批量拉取任务、分类、标签和设置。
+        - 可把这里理解为“DOM 骨架层”：负责给列表区、图表区、弹窗区、AI 会话区等提供可定位的容器。
+    -->
     <div class="app">
-        <!-- 侧边栏 -->
+        <!--
+            左侧单栏导航区：
+            - 负责放置应用品牌、视图切换、分类导航、今日简报和主题切换入口。
+            - 这一列不是数据主工作区，但承担“切视图”和“切筛选上下文”的作用。
+        -->
         <aside class="sidebar">
+            <!-- 品牌头部：纯展示区，用来固定应用识别，不承载业务交互。 -->
             <div class="logo">
                 <div class="cow-logo">
                     <div class="cow-face">
@@ -27,7 +38,11 @@
                 <div class="logo-text">牛牛待办</div>
             </div>
 
-            <!-- 视图切换 -->
+            <!--
+                视图切换区：
+                - 通过 `initViewSwitcher()` 绑定点击事件。
+                - 点击后由 `switchView()` 切换当前主视图，再由 `renderCurrentView()` 分发到列表 / 看板 / 日历 / 四象限渲染函数。
+            -->
             <div class="view-switcher">
                 <button class="view-btn active" data-view="list" title="列表视图">
                     <span class="view-icon">📋</span>
@@ -47,7 +62,12 @@
                 </button>
             </div>
 
-            <!-- 分类列表 -->
+            <!--
+                分类导航区：
+                - `categories-list` 由 `loadCategories()` 动态填充。
+                - 既承担“分类概览”，也承担点击某分类后切换筛选上下文的入口。
+                - 右上角 `+` 会打开分类弹窗，由 `showCategoryModal()` / `saveCategory()` 完成新增。
+            -->
             <div class="categories-section">
                 <div class="section-header">
                     <span>分类</span>
@@ -56,7 +76,11 @@
                 <div id="categories-list" class="categories-list"></div>
             </div>
 
-            <!-- 统计概览 -->
+            <!--
+                今日迷你统计区：
+                - 这里只展示今日完成数和今日番茄数两个快速指标。
+                - 数值由 `updateStats()` 更新，对应后端统计来自 `pywebview.api.get_today_tasks()` 与 `get_today_pomodoro_count()`。
+            -->
             <div class="stats-mini">
                 <div class="stat-item">
                     <span class="stat-label">今日完成</span>
@@ -68,7 +92,12 @@
                 </div>
             </div>
 
-            <!-- 主题切换 -->
+            <!--
+                主题切换区：
+                - 主按钮点击 `toggleThemeMenu()` 展开菜单。
+                - 每个主题项调用 `selectTheme(theme)`，再由 JS 写回后端主题设置。
+                - 这里只放主题入口，不承载业务数据。
+            -->
             <div class="theme-selector-wrapper">
                 <button class="theme-main-btn" id="themeToggleBtn" onclick="toggleThemeMenu()">
                     <span class="current-icon" id="currentThemeIcon">🐮</span>
@@ -112,14 +141,25 @@
             </div>
         </aside>
 
-        <!-- 主内容区 -->
+        <!--
+            右侧主工作区：
+            - 这是用户真正操作任务的主区域。
+            - 结构上分成：顶部操作栏 -> 筛选栏 -> 当前视图容器。
+            - 无论是列表、看板、日历还是四象限，最终都共用 `loadTasks()` 拉取的任务数据。
+        -->
         <main class="content">
-            <!-- 顶部栏 -->
+            <!--
+                页面头部 / 顶部操作区：
+                - 左侧是搜索输入区，输入时直接触发 `handleSearch()` -> `loadTasks()`。
+                - 右侧是全局操作按钮区，负责打开设置、统计、总结、成就、便签、AI 和新建任务入口。
+            -->
             <header class="top-bar">
+                <!-- 任务搜索输入区：搜索词会并入 `loadTasks()` 的筛选参数，再由后端任务查询逻辑处理。 -->
                 <div class="search-box">
                     <span class="search-icon">🔍</span>
                     <input type="text" id="search-input" placeholder="搜索任务..." oninput="handleSearch()">
                 </div>
+                <!-- 全局按钮区：这些按钮大多只负责打开对应弹窗或悬浮层，具体数据填充在 app.js 中完成。 -->
                 <div class="top-actions">
                     <button class="btn btn-ghost btn-with-text" onclick="showSettingsModal()" title="设置">
                         <span class="btn-emoji">⚙️</span>
@@ -151,7 +191,12 @@
                 </div>
             </header>
 
-            <!-- 筛选栏 -->
+            <!--
+                任务筛选区：
+                - 这里是列表类数据的主过滤面板。
+                - 任一筛选项变化都会调用 `loadTasks()`，最终走 `pywebview.api.get_tasks(...)`。
+                - 搜索区与这里共同决定当前任务结果集。
+            -->
             <div class="filter-bar">
                 <div class="filter-group">
                     <select id="filter-status" onchange="loadTasks()">
@@ -176,12 +221,20 @@
                 </div>
             </div>
 
-            <!-- 列表视图 -->
+            <!--
+                列表视图：默认主工作区
+                - `task-groups` 是动态结果区，由 `renderListView()` 统一写入任务分组、任务卡片和空状态。
+                - 适合排查“列表里为什么没有数据显示”这类问题。
+            -->
             <div id="view-list" class="view-container active">
                 <div class="task-groups" id="task-groups"></div>
             </div>
 
-            <!-- 看板视图 -->
+            <!--
+                看板视图：三列工作区
+                - 三个 `column-tasks` 容器分别承接未开始 / 进行中 / 已完成任务。
+                - 数据由 `renderKanbanView()` 渲染；拖拽排序和状态迁移也从这里发生。
+            -->
             <div id="view-kanban" class="view-container">
                 <div class="kanban-board">
                     <div class="kanban-column" data-status="not_started">
@@ -208,7 +261,11 @@
                 </div>
             </div>
 
-            <!-- 日历视图 -->
+            <!--
+                日历视图：按日期查看任务
+                - 顶部月份导航按钮调用 `prevMonth()` / `nextMonth()`。
+                - `calendar-grid` 由 `renderCalendarView()` 动态生成日期格子和日期内任务提示。
+            -->
             <div id="view-calendar" class="view-container">
                 <div class="calendar-header">
                     <button class="btn-icon" onclick="prevMonth()">◀</button>
@@ -218,7 +275,12 @@
                 <div class="calendar-grid" id="calendar-grid"></div>
             </div>
 
-            <!-- 四象限视图 -->
+            <!--
+                四象限视图：四宫格工作区
+                - 四个 `quadrant-tasks` 容器分别承接 q1~q4 任务。
+                - 由 `renderQuadrantView()` 根据任务 `quadrant` 字段写入。
+                - 这里更偏“战略分布视图”，不是任务编辑表单本身。
+            -->
             <div id="view-quadrant" class="view-container">
                 <div class="quadrant-grid">
                     <div class="quadrant q1" data-quadrant="q1">
@@ -242,7 +304,13 @@
         </main>
     </div>
 
-    <!-- 新建/编辑任务弹窗 -->
+    <!--
+        任务弹窗：
+        - 同时承担“新建任务”和“编辑任务”两个入口。
+        - 由 `showTaskModal()` / `showEditTaskModal(taskId)` 打开，
+          最终由 `saveTask()` 调用 `pywebview.api.add_task()` 或 `update_task()`。
+        - 这是任务输入区最核心的表单。
+    -->
     <div id="task-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('task-modal')"></div>
         <div class="modal-content">
@@ -251,7 +319,9 @@
                 <button class="close-btn" onclick="closeModal('task-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 隐藏主键区：编辑模式下由 JS 写入当前任务 id，新建模式保持为空。 -->
                 <input type="hidden" id="task-id">
+                <!-- 基础输入区：标题和描述决定任务最核心的展示内容。 -->
                 <div class="form-group">
                     <label class="form-label">任务标题 *</label>
                     <input type="text" id="task-title" class="form-input" placeholder="输入任务标题...">
@@ -260,6 +330,7 @@
                     <label class="form-label">描述</label>
                     <textarea id="task-description" class="form-input" rows="3" placeholder="添加任务描述..."></textarea>
                 </div>
+                <!-- 任务元信息区：优先级和截止日期会影响卡片样式、排序判断和逾期提示。 -->
                 <div class="form-row">
                     <div class="form-group">
                         <label class="form-label">优先级</label>
@@ -275,6 +346,7 @@
                         <input type="date" id="task-due-date" class="form-input">
                     </div>
                 </div>
+                <!-- 分类 / 四象限归属区：决定任务会落入哪个分类筛选或象限视图。 -->
                 <div class="form-row">
                     <div class="form-group">
                         <label class="form-label">分类</label>
@@ -291,6 +363,7 @@
                         </select>
                     </div>
                 </div>
+                <!-- 标签输入区：最终会被拆成数组，参与搜索与标签筛选。 -->
                 <div class="form-group">
                     <label class="form-label">标签</label>
                     <input type="text" id="task-tags" class="form-input" placeholder="输入标签，用逗号分隔...">
@@ -307,6 +380,7 @@
                     <div class="subtask-progress" id="subtask-progress"></div>
                 </div>
             </div>
+            <!-- 弹窗按钮区：取消仅关闭，删除只在编辑模式出现，保存会统一走 `saveTask()`。 -->
             <div class="modal-footer">
                 <button class="btn btn-ghost" onclick="closeModal('task-modal')">取消</button>
                 <button class="btn btn-danger" id="btn-delete-task" style="display:none" onclick="deleteCurrentTask()">删除</button>
@@ -315,7 +389,12 @@
         </div>
     </div>
 
-    <!-- 新建分类弹窗 -->
+    <!--
+        分类弹窗：
+        - 用于维护分类名称、图标和颜色。
+        - 保存时走 `saveCategory()` -> `pywebview.api.add_category()`。
+        - 成功后会影响侧边栏分类导航和任务表单中的分类下拉框。
+    -->
     <div id="category-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('category-modal')"></div>
         <div class="modal-content modal-sm">
@@ -324,14 +403,17 @@
                 <button class="close-btn" onclick="closeModal('category-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 分类基础信息输入区。 -->
                 <div class="form-group">
                     <label class="form-label">分类名称</label>
                     <input type="text" id="category-name" class="form-input" placeholder="输入分类名称...">
                 </div>
+                <!-- 图标选择区：由 JS 动态生成候选表情。 -->
                 <div class="form-group">
                     <label class="form-label">图标</label>
                     <div class="emoji-picker" id="category-emoji-picker"></div>
                 </div>
+                <!-- 颜色选择区：由 JS 动态生成颜色面板。 -->
                 <div class="form-group">
                     <label class="form-label">颜色</label>
                     <div class="color-picker" id="category-color-picker"></div>
@@ -344,7 +426,12 @@
         </div>
     </div>
 
-    <!-- 工作总结弹窗 -->
+    <!--
+        工作总结弹窗：
+        - 用于展示日报 / 周报 / 月报三个维度的总结结果。
+        - 入口是 `showSummaryModal()`，数据由 `loadSummaryData(period)` 拉取并回填。
+        - 这里同时包含统计卡片、任务明细区和可复制的文字总结区。
+    -->
     <div id="summary-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('summary-modal')"></div>
         <div class="modal-content modal-lg">
@@ -353,11 +440,13 @@
                 <button class="close-btn" onclick="closeModal('summary-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 总结维度切换区：切换后会重新拉取对应时间范围的数据。 -->
                 <div class="summary-tabs">
                     <button class="summary-tab active" data-period="day" onclick="switchSummaryTab('day')">日报</button>
                     <button class="summary-tab" data-period="week" onclick="switchSummaryTab('week')">周报</button>
                     <button class="summary-tab" data-period="month" onclick="switchSummaryTab('month')">月报</button>
                 </div>
+                <!-- 指标卡片区：由统计 API 汇总后回填完成数、番茄数、时长和完成率。 -->
                 <div class="summary-stats" id="summary-stats">
                     <div class="stat-card">
                         <div class="stat-icon">✅</div>
@@ -388,10 +477,12 @@
                         </div>
                     </div>
                 </div>
+                <!-- 任务明细区：`summary-task-list` 由 `renderSummaryTasks(tasks)` 写入。 -->
                 <div class="summary-content">
                     <h3>📝 任务明细</h3>
                     <div class="summary-task-list" id="summary-task-list"></div>
                 </div>
+                <!-- 文字总结输出区：只读文本框，便于复制到日报/周报场景。 -->
                 <div class="summary-text">
                     <h3>📋 文字总结</h3>
                     <textarea id="summary-text" class="form-input" rows="6" readonly></textarea>
@@ -404,7 +495,12 @@
         </div>
     </div>
 
-    <!-- 设置弹窗 -->
+    <!--
+        设置弹窗：
+        - 负责集中维护番茄钟参数、界面缩放、数据导入导出、数据统计和快捷键入口。
+        - 打开时由 `showSettingsModal()` 先读取当前设置并回填表单。
+        - 保存时由 `saveSettings()` 调用后端设置接口。
+    -->
     <div id="settings-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('settings-modal')"></div>
         <div class="modal-content">
@@ -413,6 +509,7 @@
                 <button class="close-btn" onclick="closeModal('settings-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 番茄钟参数输入区：影响后续专注时长和休息时长。 -->
                 <div class="settings-section">
                     <h3 class="settings-title">🍅 番茄钟设置</h3>
                     <div class="settings-row">
@@ -429,6 +526,7 @@
                     </div>
                 </div>
 
+                <!-- 界面缩放预览区：拖动时先本地预览，保存后再固化到设置。 -->
                 <div class="settings-section">
                     <h3 class="settings-title">🔍 界面缩放</h3>
                     <div class="settings-row zoom-row">
@@ -440,6 +538,7 @@
                     </div>
                 </div>
 
+                <!-- 数据管理区：导出当前数据库或导入外部 .db 文件。 -->
                 <div class="settings-section">
                     <h3 class="settings-title">📦 数据管理</h3>
                     <div class="settings-row">
@@ -453,6 +552,7 @@
                     </div>
                 </div>
 
+                <!-- 数据概览区：展示当前库里任务、分类、番茄记录数量。 -->
                 <div class="settings-section">
                     <h3 class="settings-title">📊 数据统计</h3>
                     <div class="data-stats" id="data-stats">
@@ -471,6 +571,7 @@
                     </div>
                 </div>
 
+                <!-- 快捷键入口区：真正的配置面板在下一个 shortcuts-modal 中展开。 -->
                 <div class="settings-section">
                     <h3 class="settings-title">⌨️ 快捷键</h3>
                     <div class="settings-row">
@@ -486,7 +587,11 @@
         </div>
     </div>
 
-    <!-- 快捷键设置弹框 -->
+    <!--
+        快捷键弹窗：
+        - 这里是设置弹窗的子面板，专门维护动作 -> 快捷键 的映射关系。
+        - `shortcuts-config-list` 由 `showShortcutsModal()` 动态生成输入项。
+    -->
     <div id="shortcuts-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('shortcuts-modal')"></div>
         <div class="modal-content modal-md">
@@ -496,6 +601,7 @@
             </div>
             <div class="modal-body">
                 <p class="settings-desc" style="margin-bottom: 12px;">点击输入框后按下组合键进行设置（支持 Ctrl/Cmd + Alt + Shift 组合）</p>
+                <!-- 快捷键动态列表区：每一项对应一个前端动作名。 -->
                 <div class="shortcuts-config-list" id="shortcuts-config-list">
                     <!-- 动态生成 -->
                 </div>
@@ -507,12 +613,19 @@
         </div>
     </div>
 
-    <!-- 番茄钟悬浮窗 -->
+    <!--
+        番茄钟悬浮窗：
+        - 这是独立于主页面布局的浮动工作区。
+        - 由 `startPomodoro(taskId)` 打开，`togglePomodoro()` / `resetPomodoro()` / `closePomodoroWidget()` 控制。
+        - UI 倒计时在前端进行，完成状态会回写后端番茄记录。
+    -->
     <div id="pomodoro-widget" class="pomodoro-widget hidden">
+        <!-- 标题栏：显示当前专注任务标题，并提供关闭入口。 -->
         <div class="pomodoro-header">
             <span id="pomodoro-task-title">任务名称</span>
             <button class="btn-icon btn-sm" onclick="closePomodoroWidget()">×</button>
         </div>
+        <!-- 倒计时主显示区：圆环和时间文本都由 JS 实时更新。 -->
         <div class="pomodoro-timer">
             <svg class="pomodoro-ring" viewBox="0 0 100 100">
                 <circle class="ring-bg" cx="50" cy="50" r="45"></circle>
@@ -520,14 +633,21 @@
             </svg>
             <div class="pomodoro-time" id="pomodoro-time">25:00</div>
         </div>
+        <!-- 控制按钮区：开始/暂停与重置都只影响当前番茄组件状态。 -->
         <div class="pomodoro-controls">
             <button class="btn btn-sm" id="btn-pomodoro-toggle" onclick="togglePomodoro()">开始</button>
             <button class="btn btn-ghost btn-sm" onclick="resetPomodoro()">重置</button>
         </div>
     </div>
 
-    <!-- 便签悬浮窗 -->
+    <!--
+        今日便签悬浮窗：
+        - 属于桌面辅助视图，不替代主任务列表。
+        - 由 `initStickyNotes()` 初始化状态，`toggleStickyNotes()` / `closeStickyNotes()` 控制显隐。
+        - `sticky-tasks` 是动态渲染区，用于展示今日任务简表。
+    -->
     <div id="sticky-notes" class="sticky-notes hidden">
+        <!-- 便签头部：兼具拖拽手柄和透明度/最小化/关闭控制。 -->
         <div class="sticky-header" id="sticky-drag-handle">
             <span class="sticky-title">📌 今日任务</span>
             <div class="sticky-controls">
@@ -537,6 +657,7 @@
                 <button class="sticky-btn" onclick="closeStickyNotes()" title="关闭">×</button>
             </div>
         </div>
+        <!-- 便签主体：上方任务列表，下方完成情况统计。 -->
         <div class="sticky-body" id="sticky-body">
             <div class="sticky-tasks" id="sticky-tasks"></div>
             <div class="sticky-stats">
@@ -545,7 +666,12 @@
         </div>
     </div>
 
-    <!-- 专注统计弹窗 -->
+    <!--
+        专注统计弹窗：
+        - 这是典型的“结果展示型弹窗”，核心不是输入，而是图表输出。
+        - 打开时由 `showStatsModal()` -> `loadStatsData()` 并行加载趋势、热力图、分类统计。
+        - 下方三个结果区分别对应三种统计视角。
+    -->
     <div id="stats-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('stats-modal')"></div>
         <div class="modal-content modal-lg">
@@ -554,10 +680,12 @@
                 <button class="close-btn" onclick="closeModal('stats-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 趋势图结果区：`pomodoro-trend-chart` 由 `renderTrendChart()` 填充。 -->
                 <div class="stats-section">
                     <h3 class="stats-title">📈 近30天专注趋势</h3>
                     <div id="pomodoro-trend-chart" class="chart-container"></div>
                 </div>
+                <!-- 热力图区：`pomodoro-heatmap` 由 `renderHeatmap()` 构造年度日期热力图。 -->
                 <div class="stats-section">
                     <h3 class="stats-title">🔥 年度专注热力图</h3>
                     <div class="heatmap-container">
@@ -575,6 +703,7 @@
                         </div>
                     </div>
                 </div>
+                <!-- 分类统计结果区：`category-stats` 由 `renderCategoryStats()` 写入各分类卡片。 -->
                 <div class="stats-section">
                     <h3 class="stats-title">📁 分类专注时长</h3>
                     <div id="category-stats" class="category-stats-grid"></div>
@@ -583,7 +712,11 @@
         </div>
     </div>
 
-    <!-- 成就模态框 -->
+    <!--
+        成就弹窗：
+        - 用于展示总体解锁情况、连续天数和成就网格。
+        - 打开时由 `showAchievementModal()` 拉取成就数据；完成任务/番茄钟后会由 `checkAndShowAchievements()` 做即时检查。
+    -->
     <div id="achievement-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('achievement-modal')"></div>
         <div class="modal-content modal-lg">
@@ -592,6 +725,7 @@
                 <button class="close-btn" onclick="closeModal('achievement-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- 成就概览统计区：展示已解锁数、总成就数、连续天数。 -->
                 <div class="achievement-stats">
                     <div class="achievement-stat-item">
                         <span class="stat-value" id="achievement-unlocked">0</span>
@@ -606,12 +740,18 @@
                         <span class="stat-label">连续天数</span>
                     </div>
                 </div>
+                <!-- 成就网格区：由 JS 按成就状态动态生成卡片。 -->
                 <div class="achievement-grid" id="achievement-grid"></div>
             </div>
         </div>
     </div>
 
-    <!-- AI 聊天弹窗 -->
+    <!--
+        AI 聊天弹窗：
+        - 这是明显的双栏工作区：左侧会话列表，右侧消息区 + 输入区。
+        - 打开时由 `showAIChatModal()` 加载 Provider 状态与会话列表。
+        - 发送消息时由 `sendAIMessage()` 调 `pywebview.api.send_chat_message()`，最终走 Python 侧 AIManager 和 Provider。
+    -->
     <div id="ai-chat-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('ai-chat-modal')"></div>
         <div class="modal-content modal-lg ai-chat-modal">
@@ -624,6 +764,7 @@
                 </div>
             </div>
             <div class="modal-body ai-chat-body">
+                <!-- 左侧历史会话栏：`ai-sessions-list` 由 `loadAISessions()` / `renderAISessions()` 填充。 -->
                 <div class="ai-chat-sessions">
                     <div class="ai-sessions-header">
                         <span>会话列表</span>
@@ -631,7 +772,9 @@
                     </div>
                     <div class="ai-sessions-list" id="ai-sessions-list"></div>
                 </div>
+                <!-- 右侧主聊天工作区：上方消息流，下方输入区。 -->
                 <div class="ai-chat-main">
+                    <!-- 对话结果区：欢迎态、历史消息、AI 回复都在这里滚动展示。 -->
                     <div class="ai-chat-messages" id="ai-chat-messages">
                         <div class="ai-chat-welcome">
                             <div class="ai-welcome-icon">🤖</div>
@@ -643,6 +786,7 @@
                             </div>
                         </div>
                     </div>
+                    <!-- 底部输入区：先显示当前 Provider 状态，再提供文本输入和发送按钮。 -->
                     <div class="ai-chat-input-area">
                         <div class="ai-provider-indicator" id="ai-provider-indicator">
                             <span class="ai-provider-dot"></span>
@@ -650,6 +794,7 @@
                         </div>
                         <div class="ai-chat-input-wrapper">
                             <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入消息..." rows="1" onkeydown="handleAIChatKeydown(event)"></textarea>
+                            <!-- 发送按钮：点击后由 `sendAIMessage()` 负责会话创建、消息落库和 AI 请求。 -->
                             <button class="ai-send-btn" onclick="sendAIMessage()" id="ai-send-btn">
                                 <span class="ai-send-icon">➤</span>
                             </button>
@@ -660,7 +805,12 @@
         </div>
     </div>
 
-    <!-- AI 设置弹窗 -->
+    <!--
+        AI 设置弹窗：
+        - 属于 AI 聊天功能的后台配置面板。
+        - 上半区是已配置 Provider 列表，下半区是新增/编辑 Provider 的表单区。
+        - 这里的测试连接、获取模型、保存配置都会调用 Python 侧 AI Provider 管理接口。
+    -->
     <div id="ai-settings-modal" class="modal">
         <div class="modal-overlay" onclick="closeModal('ai-settings-modal')"></div>
         <div class="modal-content">
@@ -669,6 +819,7 @@
                 <button class="close-btn" onclick="closeModal('ai-settings-modal')">×</button>
             </div>
             <div class="modal-body">
+                <!-- Provider 列表区：展示当前已保存的 AI 服务商及其启用状态。 -->
                 <div class="ai-providers-section">
                     <div class="section-header">
                         <h3>AI 服务商</h3>
@@ -676,9 +827,11 @@
                     </div>
                     <div class="ai-providers-list" id="ai-providers-list"></div>
                 </div>
+                <!-- Provider 表单区：默认隐藏，点击“添加”或编辑某条配置后展开。 -->
                 <div class="ai-provider-form" id="ai-provider-form" style="display:none">
                     <h3 id="ai-provider-form-title">添加 AI 服务商</h3>
                     <input type="hidden" id="ai-provider-id">
+                    <!-- 基础识别信息：名称和类型。 -->
                     <div class="form-group">
                         <label class="form-label">名称</label>
                         <input type="text" id="ai-provider-name" class="form-input" placeholder="例如：OpenAI">
@@ -691,6 +844,7 @@
                             <option value="openai-compatible">OpenAI 兼容 API</option>
                         </select>
                     </div>
+                    <!-- 认证与连接信息输入区。 -->
                     <div class="form-group">
                         <label class="form-label">API Key</label>
                         <input type="password" id="ai-provider-apikey" class="form-input" placeholder="sk-...">
@@ -699,6 +853,7 @@
                         <label class="form-label">Base URL</label>
                         <input type="text" id="ai-provider-baseurl" class="form-input" placeholder="https://api.openai.com/v1">
                     </div>
+                    <!-- 模型选择区：先获取模型列表，再选默认模型。 -->
                     <div class="form-group">
                         <label class="form-label">默认模型</label>
                         <div class="model-select-wrapper">
@@ -708,6 +863,7 @@
                             <button class="btn btn-sm" onclick="fetchAIModels()">获取模型</button>
                         </div>
                     </div>
+                    <!-- 表单按钮区：取消、测试连接、保存配置。 -->
                     <div class="form-actions">
                         <button class="btn btn-ghost" onclick="hideProviderForm()">取消</button>
                         <button class="btn btn-sm" onclick="testAIConnection()">测试连接</button>
@@ -721,7 +877,7 @@
         </div>
     </div>
 
-    <!-- 成就解锁提示 -->
+    <!-- 成就解锁 Toast：非阻塞即时提示层，由 `checkAndShowAchievements()` 触发。 -->
     <div id="achievement-toast" class="achievement-toast hidden">
         <div class="achievement-toast-content">
             <span class="achievement-toast-icon" id="achievement-toast-icon">🏆</span>
@@ -732,12 +888,17 @@
         </div>
     </div>
 
-    <!-- Toast 提示 -->
+    <!-- 通用 Toast：用于短消息反馈，例如保存成功、加载失败、复制完成等。 -->
     <div id="toast" class="toast hidden">
         <span class="toast-icon">🐮</span>
         <span class="toast-message" id="toast-message"></span>
     </div>
 
+    <!--
+        脚本依赖顺序：
+        1. 先加载 uPlot，供专注统计图表使用；
+        2. 再加载 app.js，统一接管页面事件、状态管理和 pywebview.api 调用。
+    -->
     <script src="lib/uPlot.iife.min.js"></script>
     <script src="app.js"></script>
 </body>

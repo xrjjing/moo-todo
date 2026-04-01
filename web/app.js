@@ -1,13 +1,35 @@
+/*
+ * 前端主控脚本总览
+ * ----------------
+ * 这个文件承担了当前桌面应用几乎全部前端职责：
+ * 1. 维护页面运行时状态（任务、分类、当前视图、番茄钟、AI 会话等）
+ * 2. 接收 `index.html` 上的点击/输入/弹窗事件
+ * 3. 调用 `window.pywebview.api.*` 与 Python 后端通信
+ * 4. 把后端返回的数据重新渲染到各个 DOM 容器中
+ *
+ * 推荐排查顺序：
+ * - “页面上某块为什么没数据”：先看对应 `load*()` / `render*()` 函数
+ * - “按钮点击后为什么没保存”：看按钮入口函数 -> `pywebview.api.*` -> `api.py`
+ * - “显示对了但刷新后丢失”：前端通常没问题，继续追 Python Service / DB 层
+ */
+
 // ===== 状态管理 =====
+// `state` 是非 AI 功能的前端单例状态树；多数视图和弹窗都从这里读写数据。
 const state = {
+    // 任务主数据源：列表 / 看板 / 日历 / 四象限这四种主视图都共用它。
     tasks: [],
+    // 分类与标签是筛选器、任务表单、侧边栏导航的共享数据源。
     categories: [],
     tags: [],
+    // 当前视图与筛选上下文。
     currentView: 'list',
     currentCategory: '',
     currentTag: '',
+    // 日历视图当前翻到的月份。
     calendarDate: new Date(),
+    // 任务弹窗当前是否处于编辑态；为空表示新建。
     editingTaskId: null,
+    // 番茄钟组件运行态。
     pomodoroTaskId: null,
     pomodoroRecordId: null,
     pomodoroRunning: false,
@@ -60,6 +82,11 @@ function getLocalDateStr() {
 }
 
 // ===== 初始化 =====
+// 初始化顺序很重要：
+// 1. 先等 pywebview API 可用，否则所有后端调用都会报空；
+// 2. 再恢复主题/缩放等界面状态；
+// 3. 再加载分类、标签、任务，让主工作区有数据；
+// 4. 最后初始化拖拽、快捷键、便签等增强交互。
 document.addEventListener('DOMContentLoaded', async () => {
     await waitForApi();
     initTheme();
@@ -74,6 +101,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     initStickyNotes();
 });
 
+/**
+ * 等待 pywebview 注入的后端 API 就绪。
+ *
+ * 调用链：
+ * `main.py -> webview.create_window(js_api=Api())`
+ *   -> 页面加载
+ *   -> `window.pywebview.api`
+ *
+ * 若页面能打开但所有后端调用都报错，优先检查这里是否一直等不到 API。
+ */
 async function waitForApi() {
     while (!window.pywebview?.api) {
         await new Promise(r => setTimeout(r, 50));
@@ -162,6 +199,13 @@ function initViewSwitcher() {
     });
 }
 
+/**
+ * 切换当前主视图。
+ *
+ * 它只做两件事：
+ * 1. 更新按钮态和容器显隐；
+ * 2. 把真正的内容渲染分发给 `renderCurrentView()`。
+ */
 function switchView(view) {
     state.currentView = view;
 
@@ -174,6 +218,15 @@ function switchView(view) {
     renderCurrentView();
 }
 
+/**
+ * 视图分发器。
+ *
+ * `state.tasks` 是统一输入，不同视图只是展示方式不同：
+ * - 列表：按状态分组
+ * - 看板：按状态列展示
+ * - 日历：按 due_date 映射到日期格子
+ * - 四象限：按 quadrant 映射到四宫格
+ */
 function renderCurrentView() {
     switch (state.currentView) {
         case 'list': renderListView(); break;
@@ -184,6 +237,7 @@ function renderCurrentView() {
 }
 
 // ===== 数据加载 =====
+// 分类加载后要同时刷新：左侧分类导航 + 任务弹窗分类下拉框。
 async function loadCategories() {
     state.categories = await pywebview.api.get_categories();
     renderCategoriesList();
@@ -199,6 +253,7 @@ async function loadTags() {
     }
 }
 
+// 标签筛选器只承载“过滤入口”，真正的标签数据以任务上的 tags 为准。
 function renderTagFilter() {
     const select = document.getElementById('filter-tag');
     if (!select) return;
@@ -208,6 +263,18 @@ function renderTagFilter() {
         ).join('');
 }
 
+/**
+ * 任务总加载入口。
+ *
+ * 这是最常用的页面主链路之一：
+ * 搜索框 / 分类点击 / 筛选器变化 / 保存任务后刷新
+ *   -> `loadTasks()`
+ *   -> `pywebview.api.get_tasks(...)`
+ *   -> Python `Api.get_tasks()` / `TodoService.get_tasks()`
+ *   -> 返回后刷新当前视图与顶部统计
+ *
+ * 如果“页面明明有容器但看起来没数据”，先看这里有没有拿到正确任务集。
+ */
 async function loadTasks() {
     const status = document.getElementById('filter-status')?.value || '';
     const priority = document.getElementById('filter-priority')?.value || '';
@@ -226,6 +293,7 @@ function handleSearch() {
     loadTasks();
 }
 
+// 顶部迷你统计是轻量概览，不和总结/专注统计弹窗共用同一套 DOM。
 async function updateStats() {
     const todayTasks = await pywebview.api.get_today_tasks();
     const completed = todayTasks.filter(t => t.status === 'completed').length;
@@ -236,6 +304,7 @@ async function updateStats() {
 }
 
 // ===== 分类渲染 =====
+// 左侧分类导航既是展示区，也是“快速切换 filter-category”的操作区。
 function renderCategoriesList() {
     const container = document.getElementById('categories-list');
     const taskCounts = {};
@@ -281,6 +350,14 @@ function selectCategory(categoryId) {
 }
 
 // ===== 列表视图 =====
+/**
+ * 列表视图渲染器。
+ *
+ * 这是默认主工作区，也是最适合排查任务显示问题的视图：
+ * - 先按状态分三组
+ * - 没数据时展示空状态
+ * - 有数据时委托 `renderTaskCard(task)` 生成卡片
+ */
 function renderListView() {
     const container = document.getElementById('task-groups');
 
@@ -319,6 +396,7 @@ function renderListView() {
         `).join('');
 }
 
+// 单张任务卡片模板：列表视图里的“最小可操作单元”。
 function renderTaskCard(task) {
     const category = state.categories.find(c => c.id === task.category_id);
     const isOverdue = task.due_date && task.due_date < getLocalDateStr() && task.status !== 'completed';
@@ -359,6 +437,11 @@ function renderTaskCard(task) {
     `;
 }
 
+/**
+ * 切换任务完成状态。
+ *
+ * 这是任务卡片勾选框、键盘快捷键、便签勾选等多个入口复用的状态切换点。
+ */
 async function toggleTaskStatus(taskId) {
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
@@ -370,6 +453,7 @@ async function toggleTaskStatus(taskId) {
 }
 
 // ===== 看板视图 =====
+// 看板视图的核心是“按状态列组织任务”，后续拖拽改状态也依赖这套列结构。
 function renderKanbanView() {
     const columns = {
         'not_started': document.getElementById('kanban-not-started'),
@@ -393,6 +477,7 @@ function renderKanbanView() {
     document.getElementById('count-completed').textContent = counts['completed'];
 }
 
+// 看板卡片比列表卡片轻，主要承载拖拽与快速打开编辑弹窗。
 function renderKanbanTask(task) {
     return `
         <div class="kanban-task"
@@ -407,6 +492,17 @@ function renderKanbanTask(task) {
 }
 
 // ===== 日历视图 =====
+/**
+ * 日历视图渲染器。
+ *
+ * 核心输入：
+ * - `state.calendarDate`：当前查看月份
+ * - `state.tasks`：当前任务集合
+ *
+ * 核心输出：
+ * - `calendar-grid` 中的日期格子
+ * - 每个格子上的任务点提示
+ */
 function renderCalendarView() {
     const year = state.calendarDate.getFullYear();
     const month = state.calendarDate.getMonth();
@@ -476,6 +572,8 @@ function nextMonth() {
     renderCalendarView();
 }
 
+// 点击某一天后，当前实现会先切回列表，再重新拉一遍任务数据。
+// 若未来要做“日历点击后真正按日期筛选”，这里是优先改造入口。
 function showDayTasks(dateStr) {
     // 简化：筛选该日期任务
     document.getElementById('filter-status').value = '';
@@ -485,6 +583,7 @@ function showDayTasks(dateStr) {
 }
 
 // ===== 四象限视图 =====
+// 四象限不是独立数据源，而是对已有任务按 `quadrant` 字段再分桶展示。
 function renderQuadrantView() {
     const quadrants = {
         'q1': document.getElementById('quadrant-q1'),
@@ -514,6 +613,12 @@ function renderQuadrantView() {
 }
 
 // ===== 拖拽功能 =====
+/**
+ * 看板拖拽初始化。
+ *
+ * 当前只支持“把任务拖到另一列以切换状态”，不负责精细排序。
+ * 如果拖拽时视觉反馈正常但状态没改，优先看 drop 回调里的 `update_task_status()`。
+ */
 function initDragDrop() {
     document.addEventListener('dragstart', (e) => {
         if (e.target.classList.contains('kanban-task')) {
@@ -553,6 +658,7 @@ function initDragDrop() {
 }
 
 // ===== 任务弹窗 =====
+// 新建模式：清空表单、隐藏删除按钮和子任务区。
 function showTaskModal() {
     state.editingTaskId = null;
     document.getElementById('task-modal-title').textContent = '新建任务';
@@ -573,6 +679,12 @@ function showTaskModal() {
     document.getElementById('task-title').focus();
 }
 
+/**
+ * 编辑模式：把任务对象回填到弹窗。
+ *
+ * 这个函数是“任务卡片 -> 编辑表单”的桥。
+ * 若用户说“点开任务后表单内容不对”，优先查这里的回填逻辑。
+ */
 function showEditTaskModal(taskId) {
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
@@ -596,6 +708,15 @@ function showEditTaskModal(taskId) {
     openModal('task-modal');
 }
 
+/**
+ * 保存任务。
+ *
+ * 分两条支线：
+ * - `state.editingTaskId` 有值：走更新
+ * - 否则：走新增
+ *
+ * 保存成功后统一关闭弹窗并刷新 `state.tasks`。
+ */
 async function saveTask() {
     const title = document.getElementById('task-title').value.trim();
     const description = document.getElementById('task-description').value.trim();
@@ -631,6 +752,7 @@ async function saveTask() {
     }
 }
 
+// 真正删除动作仍走后端；前端这里只做确认与刷新。
 async function deleteCurrentTask() {
     if (!state.editingTaskId) return;
     if (!confirm('确定要删除这个任务吗？')) return;
@@ -642,6 +764,7 @@ async function deleteCurrentTask() {
 }
 
 // ===== 子任务功能 =====
+// 子任务区只在编辑任务时出现；它是任务弹窗里的局部动态渲染区。
 function renderSubtasks(task) {
     const listContainer = document.getElementById('subtask-list');
     const progressContainer = document.getElementById('subtask-progress');
@@ -695,6 +818,7 @@ function initSubtaskEvents() {
     });
 }
 
+// 子任务新增入口只服务当前正在编辑的任务。
 async function addSubtask() {
     if (!state.editingTaskId) return;
 
@@ -718,6 +842,7 @@ async function addSubtask() {
     }
 }
 
+// 子任务的勾选与删除都采用“调用后端 -> 重载当前任务 -> 重绘局部子任务区”的模式。
 async function toggleSubtask(taskId, subtaskId) {
     try {
         await pywebview.api.toggle_subtask(taskId, subtaskId);
@@ -742,12 +867,14 @@ async function deleteSubtask(taskId, subtaskId) {
 }
 
 // ===== 分类弹窗 =====
+// 分类弹窗的数据非常轻：只有名称、图标、颜色三类字段。
 const EMOJI_OPTIONS = ['💼', '📚', '🏠', '🎮', '🏃', '🛒', '💡', '🎯', '📌', '⭐'];
 const COLOR_OPTIONS = ['#FFB347', '#87CEEB', '#B5EAD7', '#C7CEEA', '#E0BBE4', '#FFD93D', '#F59E0B', '#3B82F6', '#10B981', '#6B7280'];
 
 let selectedCategoryEmoji = EMOJI_OPTIONS[0];
 let selectedCategoryColor = COLOR_OPTIONS[0];
 
+// 打开时同时初始化表情面板和颜色面板，避免页面常驻大量静态选项 DOM。
 function showCategoryModal() {
     document.getElementById('category-name').value = '';
     selectedCategoryEmoji = EMOJI_OPTIONS[0];
@@ -766,6 +893,7 @@ function showCategoryModal() {
     openModal('category-modal');
 }
 
+// 图标/颜色选择都只改前端临时状态，真正保存仍在 `saveCategory()`。
 function selectCategoryEmoji(emoji) {
     selectedCategoryEmoji = emoji;
     document.querySelectorAll('#category-emoji-picker .emoji-item').forEach(el => {
@@ -780,6 +908,7 @@ function selectCategoryColor(color) {
     });
 }
 
+// 分类保存成功后只需刷新分类相关 UI，不必整页重载。
 async function saveCategory() {
     const name = document.getElementById('category-name').value.trim();
     if (!name) {
@@ -794,6 +923,18 @@ async function saveCategory() {
 }
 
 // ===== 番茄钟 =====
+/**
+ * 打开番茄钟悬浮窗并创建一条后端专注记录。
+ *
+ * 前端职责：
+ * - 记录当前任务 id
+ * - 打开悬浮窗
+ * - 启动/暂停/重置本地倒计时
+ *
+ * 后端职责：
+ * - 先创建一条未完成的 pomodoro 记录
+ * - 完成时再把记录更新为 completed
+ */
 async function startPomodoro(taskId) {
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
@@ -813,6 +954,7 @@ async function startPomodoro(taskId) {
     state.pomodoroRecordId = record?.id || null;
 }
 
+// 这里只控制前端计时器的暂停/继续；真正“完成一次番茄”仍以 `completePomodoro()` 为准。
 function togglePomodoro() {
     if (state.pomodoroRunning) {
         clearInterval(state.pomodoroInterval);
@@ -832,6 +974,7 @@ function togglePomodoro() {
     }
 }
 
+// 重置只重置当前悬浮窗倒计时，不会删除已创建的后端记录。
 function resetPomodoro() {
     clearInterval(state.pomodoroInterval);
     state.pomodoroTime = 25 * 60;
@@ -840,6 +983,14 @@ function resetPomodoro() {
     updatePomodoroDisplay();
 }
 
+/**
+ * 完成一次番茄钟。
+ *
+ * 这里是“番茄钟 -> 任务统计 / 成就”的关键汇合点：
+ * - 完成后端 pomodoro 记录
+ * - 刷新任务列表和顶部统计
+ * - 触发成就检查
+ */
 async function completePomodoro() {
     clearInterval(state.pomodoroInterval);
     state.pomodoroRunning = false;
@@ -861,12 +1012,14 @@ async function completePomodoro() {
     await checkAndShowAchievements();
 }
 
+// 关闭悬浮窗时只处理本地 UI 状态。
 function closePomodoroWidget() {
     clearInterval(state.pomodoroInterval);
     document.getElementById('pomodoro-widget').classList.add('hidden');
     state.pomodoroRunning = false;
 }
 
+// 倒计时文本和进度环都从同一个 `state.pomodoroTime` 推导，避免双源状态。
 function updatePomodoroDisplay() {
     const minutes = Math.floor(state.pomodoroTime / 60);
     const seconds = state.pomodoroTime % 60;
@@ -881,6 +1034,7 @@ function updatePomodoroDisplay() {
 }
 
 // ===== 键盘快捷键 =====
+// 先从后端读取用户自定义配置，再统一把监听器挂到 document 上。
 async function initKeyboardShortcuts() {
     try {
         const data = await pywebview.api.get_shortcuts();
@@ -893,6 +1047,7 @@ async function initKeyboardShortcuts() {
     document.addEventListener('keydown', handleKeyboardShortcut);
 }
 
+// 快捷键在输入框、弹窗激活时会适当让位，避免误触影响表单输入。
 function handleKeyboardShortcut(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
         return;
@@ -912,6 +1067,7 @@ function handleKeyboardShortcut(e) {
     executeShortcutAction(action);
 }
 
+// 这里做的是“按键组合 -> 动作名”的匹配，不直接执行业务逻辑。
 function matchShortcut(e) {
     const pressedCtrl = e.ctrlKey || e.metaKey;
     const pressedAlt = e.altKey;
@@ -932,6 +1088,7 @@ function matchShortcut(e) {
     return null;
 }
 
+// 动作分发表：把配置层的 action 名字映射到真正的函数入口。
 function executeShortcutAction(action) {
     const actions = {
         newTask: () => showTaskModal(),
@@ -953,7 +1110,7 @@ function executeShortcutAction(action) {
     }
 }
 
-// 键盘导航：选择任务
+// 键盘导航：当前只对列表视图和看板视图有效。
 function navigateTask(direction) {
     updateKeyboardNavTasks();
     if (state.keyboardNavTasks.length === 0) return;
@@ -1018,6 +1175,14 @@ async function toggleSelectedTaskStatus() {
 }
 
 // ===== 便签悬浮窗 =====
+/**
+ * 便签悬浮窗初始化。
+ *
+ * 负责三类事情：
+ * 1. 恢复持久化的显示状态与位置；
+ * 2. 建立拖拽逻辑；
+ * 3. 在拖拽结束后把位置写回后端设置。
+ */
 function initStickyNotes() {
     const sticky = document.getElementById('sticky-notes');
     const handle = document.getElementById('sticky-drag-handle');
@@ -1072,6 +1237,7 @@ function initStickyNotes() {
     });
 }
 
+// 便签设置和普通设置共用 `update_settings()`，但这里只更新便签相关字段。
 async function loadStickySettings() {
     try {
         const settings = await pywebview.api.get_settings();
@@ -1095,6 +1261,7 @@ async function loadStickySettings() {
     }
 }
 
+// 位置、透明度、显隐都会在这里回写，避免下次启动丢失便签状态。
 async function saveStickySettings() {
     try {
         await pywebview.api.update_settings({
@@ -1108,6 +1275,7 @@ async function saveStickySettings() {
     }
 }
 
+// 打开便签时会即时重绘“今日任务”列表，保证它不是旧缓存。
 function toggleStickyNotes() {
     const sticky = document.getElementById('sticky-notes');
     state.stickyVisible = !state.stickyVisible;
@@ -1139,6 +1307,12 @@ function adjustStickyOpacity(delta) {
     document.getElementById('sticky-notes').style.opacity = state.stickyOpacity;
 }
 
+/**
+ * 渲染便签里的今日任务。
+ *
+ * 优先走后端 `get_today_tasks()`，保证口径与顶部统计一致；
+ * 如果后端调用失败，再退回前端基于 `state.tasks` 的简化过滤逻辑。
+ */
 async function renderStickyTasks() {
     const container = document.getElementById('sticky-tasks');
     let todayTasks = [];
@@ -1187,11 +1361,13 @@ async function toggleTaskFromSticky(taskId) {
 // ===== 工作总结 =====
 let currentSummaryPeriod = 'day';
 
+// 打开总结弹窗时默认进入“日报”页签，再由页签切换逻辑触发真实加载。
 function showSummaryModal() {
     openModal('summary-modal');
     switchSummaryTab('day');
 }
 
+// 页签切换只是更新选中状态，真正的数据装配交给 `loadSummaryData()`。
 function switchSummaryTab(period) {
     currentSummaryPeriod = period;
     document.querySelectorAll('.summary-tab').forEach(tab => {
@@ -1200,6 +1376,18 @@ function switchSummaryTab(period) {
     loadSummaryData(period);
 }
 
+/**
+ * 工作总结核心加载函数。
+ *
+ * 它会同时请求：
+ * - 汇总统计：`get_stats(start, end)`
+ * - 时间范围内任务：`get_tasks_by_date_range(start, end)`
+ *
+ * 然后分别回填：
+ * - 指标卡片
+ * - 任务明细列表
+ * - 文本总结区
+ */
 async function loadSummaryData(period) {
     const { startDate, endDate, periodName } = getDateRange(period);
 
@@ -1227,6 +1415,7 @@ async function loadSummaryData(period) {
     }
 }
 
+// 这个函数负责把“日报 / 周报 / 月报”映射成真实日期范围。
 function getDateRange(period) {
     const now = new Date();
     const today = getLocalDateStr();
@@ -1252,6 +1441,7 @@ function getDateRange(period) {
     return { startDate, endDate, periodName };
 }
 
+// 总结里的任务明细是只读结果区，不复用主任务卡片模板。
 function renderSummaryTasks(tasks) {
     const container = document.getElementById('summary-task-list');
 
@@ -1271,6 +1461,7 @@ function renderSummaryTasks(tasks) {
     `).join('');
 }
 
+// 文本总结区是为了方便用户直接复制到外部日报/周报渠道。
 function generateSummaryText(periodName, stats, tasks) {
     const completed = stats.completed_tasks || 0;
     const total = stats.total_tasks || 0;
@@ -1327,11 +1518,19 @@ async function copySummary() {
 }
 
 // ===== 设置 =====
+// 设置弹窗打开前先回填后端设置，避免用户看到旧值。
 async function showSettingsModal() {
     await loadSettingsData();
     openModal('settings-modal');
 }
 
+/**
+ * 设置弹窗数据加载。
+ *
+ * 这里同时聚合两类数据：
+ * - 用户设置：番茄钟时长、缩放
+ * - 数据概览：任务数、分类数、番茄记录数
+ */
 async function loadSettingsData() {
     try {
         const settings = await pywebview.api.get_settings();
@@ -1352,16 +1551,19 @@ async function loadSettingsData() {
     }
 }
 
+// 拖动缩放滑块时先做本地预览，真正持久化发生在 `saveSettings()`。
 function previewZoom(value) {
     document.getElementById('zoom-value').textContent = value + '%';
     applyZoom(value);
 }
 
+// 当前项目直接用 `document.body.style.zoom` 做整体缩放，逻辑简单但影响全局。
 function applyZoom(zoom) {
     document.body.style.zoom = zoom / 100;
 }
 
 // ===== 快捷键配置 =====
+// 设置弹窗里的快捷键面板与全局运行时快捷键共享同一套 `state.shortcuts`。
 async function loadShortcutsConfig() {
     try {
         const data = await pywebview.api.get_shortcuts();
@@ -1373,6 +1575,7 @@ async function loadShortcutsConfig() {
     }
 }
 
+// 快捷键配置区是纯动态列表；每一行都对应一个可执行动作。
 function renderShortcutsConfig() {
     const container = document.getElementById('shortcuts-config-list');
     if (!container) return;
@@ -1413,6 +1616,7 @@ function renderShortcutsConfig() {
     });
 }
 
+// 录制快捷键时会按平台差异展示 Cmd / Ctrl 等文案，但内部存的仍是统一结构。
 function formatShortcut(shortcut) {
     if (!shortcut || !shortcut.key) return '未设置';
     const parts = [];
@@ -1440,6 +1644,7 @@ function formatKeyName(key) {
     return keyMap[key] || key.toUpperCase();
 }
 
+// 聚焦输入框后进入“录制模式”，此时后续 keydown 会被解释为快捷键配置输入。
 function startShortcutRecording(e) {
     const input = e.target;
     input.classList.add('recording');
@@ -1456,6 +1661,7 @@ function stopShortcutRecording(e) {
     input.value = formatShortcut(shortcut);
 }
 
+// 快捷键录入时会先做冲突检测，避免两个动作绑定同一组合键。
 function recordShortcut(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -1506,6 +1712,7 @@ function checkShortcutConflict(currentAction, newShortcut) {
     return null;
 }
 
+// 快捷键配置弹窗只是配置 UI；保存仍需显式调用后端接口。
 function clearShortcut(e) {
     const action = e.target.dataset.action;
     state.shortcuts[action] = { ctrl: false, alt: false, shift: false, key: '' };
@@ -1518,6 +1725,7 @@ async function showShortcutsModal() {
     openModal('shortcuts-modal');
 }
 
+// 这里会把整套动作映射一次性提交给后端，不是逐项保存。
 async function saveShortcutsAndClose() {
     try {
         await pywebview.api.save_shortcuts(state.shortcuts);
@@ -1541,6 +1749,15 @@ async function resetShortcuts() {
     }
 }
 
+/**
+ * 保存设置。
+ *
+ * 当前拆成两类接口：
+ * - 番茄钟参数：`update_settings`
+ * - 缩放：`save_zoom`
+ *
+ * 这是因为历史上这两类设置在后端入口上是分开的。
+ */
 async function saveSettings() {
     const pomodoroWork = parseInt(document.getElementById('settings-pomodoro-work').value) || 25;
     const pomodoroBreak = parseInt(document.getElementById('settings-pomodoro-break').value) || 5;
@@ -1561,6 +1778,7 @@ async function saveSettings() {
     }
 }
 
+// 导出逻辑会先取数据库真实路径，再在同目录拼一个带日期的备份文件名。
 async function exportData() {
     try {
         const dbPath = await pywebview.api.get_db_path();
@@ -1578,6 +1796,7 @@ async function exportData() {
     }
 }
 
+// 导入是高影响操作：先校验文件类型，再让后端做真正的备份/覆盖/回滚。
 async function handleImportFile(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -1608,6 +1827,7 @@ async function handleImportFile(event) {
 }
 
 // ===== 弹窗 =====
+// 当前项目所有 modal 都走统一的 `show` class 显隐方案。
 function openModal(id) {
     document.getElementById(id).classList.add('show');
 }
@@ -1617,6 +1837,7 @@ function closeModal(id) {
 }
 
 // ===== Toast =====
+// 通用轻提示。这里只负责展示，不负责业务恢复或重试。
 function showToast(msg, isError = false) {
     const toast = document.getElementById('toast');
     const msgEl = document.getElementById('toast-message');
@@ -1632,11 +1853,22 @@ function showToast(msg, isError = false) {
 // ===== 专注统计图表 =====
 let trendChart = null;
 
+// 打开统计弹窗后立即开始加载数据，避免先显示空白结果。
 function showStatsModal() {
     openModal('stats-modal');
     loadStatsData();
 }
 
+/**
+ * 专注统计总加载入口。
+ *
+ * 这里特意并行请求三类数据：
+ * - 每日趋势
+ * - 年度热力图
+ * - 分类分布
+ *
+ * 如果统计弹窗慢，首先看这里的三个接口是否有某一个明显拖后腿。
+ */
 async function loadStatsData() {
     try {
         // 并行加载所有统计数据
@@ -1658,6 +1890,7 @@ async function loadStatsData() {
     }
 }
 
+// 趋势图是最依赖第三方库 uPlot 的区域；若图表异常，优先查这里和容器尺寸。
 function renderTrendChart(dailyStats) {
     const container = document.getElementById('pomodoro-trend-chart');
     container.innerHTML = '';
@@ -1706,6 +1939,7 @@ function renderTrendChart(dailyStats) {
     trendChart = new uPlot(opts, [dates, counts], container);
 }
 
+// 热力图不依赖第三方图表库，而是直接动态生成一整年的日期格子。
 function renderHeatmap(data) {
     const container = document.getElementById('pomodoro-heatmap');
     container.innerHTML = '';
@@ -1739,6 +1973,7 @@ function renderHeatmap(data) {
     }
 }
 
+// 分类统计区本质是一个“排名卡片列表”，不是图表库生成的图。
 function renderCategoryStats(categories) {
     const container = document.getElementById('category-stats');
     container.innerHTML = '';
@@ -1784,11 +2019,20 @@ const TIER_NAMES = {
     diamond: '钻石'
 };
 
+// 成就弹窗打开时只做一件事：加载并重绘整张成就面板。
 async function showAchievementModal() {
     openModal('achievement-modal');
     await loadAchievements();
 }
 
+/**
+ * 成就面板数据装配。
+ *
+ * 后端已经返回了“展示友好结构”，这里主要负责：
+ * - 更新顶部统计
+ * - 排序
+ * - 渲染成就卡片
+ */
 async function loadAchievements() {
     const data = await pywebview.api.get_achievements();
     if (!data || !data.achievements) return;
@@ -1832,6 +2076,7 @@ async function loadAchievements() {
     });
 }
 
+// 任务完成、番茄完成后都会走这里，负责把“新解锁成就列表”转成顺序弹出的提示。
 async function checkAndShowAchievements() {
     const newAchievements = await pywebview.api.check_achievements();
     if (newAchievements && newAchievements.length > 0) {
@@ -1864,7 +2109,8 @@ function showAchievementToast(achievement) {
     });
 }
 
-// 在任务状态切换时检查成就（任务完成时触发）
+// 在不改原有调用点的前提下，对 `toggleTaskStatus` 做一层包装：
+// 只有任务从“未完成 -> 已完成”时，才额外触发成就检查。
 const originalToggleTaskStatus = toggleTaskStatus;
 toggleTaskStatus = async function(taskId) {
     const taskBefore = state.tasks.find(t => t.id === taskId);
@@ -1881,6 +2127,7 @@ toggleTaskStatus = async function(taskId) {
 
 // ========== AI 聊天功能 ==========
 
+// `aiState` 独立于普通 `state`，避免待办主界面状态和 AI 会话状态互相污染。
 const aiState = {
     sessions: [],
     currentSessionId: null,
@@ -1890,6 +2137,15 @@ const aiState = {
     isLoading: false
 };
 
+/**
+ * 打开 AI 聊天主面板。
+ *
+ * 进入顺序：
+ * 1. 打开弹窗壳
+ * 2. 加载 Provider 状态
+ * 3. 加载会话列表
+ * 4. 更新顶部 Provider 指示灯
+ */
 async function showAIChatModal() {
     openModal('ai-chat-modal');
     await loadAIProviders();
@@ -1897,6 +2153,7 @@ async function showAIChatModal() {
     updateAIProviderIndicator();
 }
 
+// Provider 状态决定右下角输入区是否允许真正发送消息。
 async function loadAIProviders() {
     try {
         aiState.providers = await pywebview.api.get_ai_providers();
@@ -1907,6 +2164,7 @@ async function loadAIProviders() {
     }
 }
 
+// 这个指示器只做“当前激活服务商”展示，不代表网络一定健康。
 function updateAIProviderIndicator() {
     const indicator = document.getElementById('ai-provider-indicator');
     if (!indicator) return;
@@ -1923,6 +2181,7 @@ function updateAIProviderIndicator() {
     }
 }
 
+// 左侧会话栏的真实数据源是后端的 `chat_sessions`，不是前端缓存。
 async function loadAISessions() {
     try {
         aiState.sessions = await pywebview.api.get_chat_sessions(false);
@@ -1932,6 +2191,7 @@ async function loadAISessions() {
     }
 }
 
+// 会话列表是典型的动态导航区：点击切换会话，删除按钮则直接删整条会话记录。
 function renderAISessions() {
     const container = document.getElementById('ai-sessions-list');
     if (!container) return;
@@ -1950,6 +2210,7 @@ function renderAISessions() {
     `).join('');
 }
 
+// 如果当前没有会话但用户直接发消息，前面逻辑会先调用这里自动补一个新会话。
 async function createAISession() {
     try {
         const result = await pywebview.api.create_chat_session('新对话');
@@ -1968,6 +2229,7 @@ async function createAISession() {
     }
 }
 
+// 切换会话时要防止异步串话，所以这里保留了 `requestedId` 检查。
 async function selectAISession(sessionId) {
     aiState.currentSessionId = sessionId;
     renderAISessions();
@@ -1997,6 +2259,7 @@ async function deleteAISession(sessionId) {
     }
 }
 
+// 消息历史是右侧聊天结果区的唯一输入来源。
 async function loadAIChatMessages(sessionId) {
     try {
         const messages = await pywebview.api.get_chat_messages(sessionId);
@@ -2008,6 +2271,7 @@ async function loadAIChatMessages(sessionId) {
     }
 }
 
+// 聊天结果区既要处理欢迎态，也要处理真实消息流渲染。
 function renderAIChatMessages() {
     const container = document.getElementById('ai-chat-messages');
     if (!container) return;
@@ -2037,6 +2301,7 @@ function renderAIChatMessages() {
     container.scrollTop = container.scrollHeight;
 }
 
+// 当前只做轻量 Markdown 兼容，属于“展示增强”而不是完整 Markdown 渲染器。
 function formatAIMessage(content) {
     // 简单的 Markdown 转换
     let html = escapeHtml(content);
@@ -2054,6 +2319,7 @@ function clearAIChatMessages() {
     renderAIChatMessages();
 }
 
+// 清空的是当前会话的消息，不是删除整条会话。
 async function clearAIChat() {
     if (!aiState.currentSessionId) {
         showToast('请先选择或创建会话');
@@ -2071,6 +2337,7 @@ async function clearAIChat() {
     }
 }
 
+// Enter 发送、Shift+Enter 换行，是聊天输入区的标准行为。
 function handleAIChatKeydown(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
@@ -2080,6 +2347,18 @@ function handleAIChatKeydown(event) {
     }
 }
 
+/**
+ * AI 发送消息主链路。
+ *
+ * 关键步骤：
+ * 1. 校验输入、Provider、会话是否准备好
+ * 2. 先把用户消息插入前端消息流，立即给出界面反馈
+ * 3. 显示“AI 正在输入”占位
+ * 4. 调后端 `send_chat_message`
+ * 5. 成功则插入 AI 回复；失败则插入错误消息
+ *
+ * 如果 AI 会话看起来“卡住”或“串会话”，这里是首要排查点。
+ */
 async function sendAIMessage() {
     const input = document.getElementById('ai-chat-input');
     if (!input) return;
@@ -2170,12 +2449,21 @@ async function sendAIMessage() {
 
 // ========== AI 设置功能 ==========
 
+// AI 设置面板是聊天面板的后台管理区，不直接承载聊天记录。
 async function showAISettingsModal() {
     openModal('ai-settings-modal');
     await loadAIProvidersList();
     hideProviderForm();
 }
 
+/**
+ * 加载 Provider 列表并渲染操作区。
+ *
+ * 这里展示的是“配置管理视图”：
+ * - 当前有哪些服务商
+ * - 谁是已启用状态
+ * - 每条记录的编辑/删除/启用入口
+ */
 async function loadAIProvidersList() {
     try {
         const providers = await pywebview.api.get_ai_providers();
@@ -2207,6 +2495,7 @@ async function loadAIProvidersList() {
     }
 }
 
+// 这两个函数只负责前端展示文案，不参与真实请求逻辑。
 function getProviderIcon(type) {
     const icons = {
         'openai': '🟢',
@@ -2225,6 +2514,7 @@ function getProviderTypeName(type) {
     return names[type] || type;
 }
 
+// 新增 Provider 时先重置表单到默认状态，再按类型联动 base_url。
 function showAddProviderForm() {
     document.getElementById('ai-provider-form').style.display = 'block';
     document.getElementById('ai-provider-form-title').textContent = '添加 AI 服务商';
@@ -2241,6 +2531,7 @@ function hideProviderForm() {
     document.getElementById('ai-provider-form').style.display = 'none';
 }
 
+// Provider 类型变化时，默认地址和占位提示也会跟着变化。
 function onProviderTypeChange() {
     const type = document.getElementById('ai-provider-type').value;
     const baseUrlInput = document.getElementById('ai-provider-baseurl');
@@ -2255,6 +2546,7 @@ function onProviderTypeChange() {
     baseUrlInput.placeholder = type === 'openai-compatible' ? '输入 API 地址' : defaultUrls[type];
 }
 
+// “获取模型”是配置辅助动作，便于用户从远端拉取可选模型列表。
 async function fetchAIModels() {
     const type = document.getElementById('ai-provider-type').value;
     const apiKey = document.getElementById('ai-provider-apikey').value;
@@ -2293,6 +2585,7 @@ async function fetchAIModels() {
     }
 }
 
+// 测试连接不会保存配置，只验证当前表单里的临时参数是否可用。
 async function testAIConnection() {
     const type = document.getElementById('ai-provider-type').value;
     const apiKey = document.getElementById('ai-provider-apikey').value;
@@ -2325,6 +2618,13 @@ async function testAIConnection() {
     }
 }
 
+/**
+ * 保存 Provider 配置。
+ *
+ * 保存成功后需要同时刷新两处：
+ * - 设置面板里的 Provider 列表
+ * - 聊天面板里的 activeProvider 状态
+ */
 async function saveAIProvider() {
     const id = document.getElementById('ai-provider-id').value || `provider_${Date.now()}`;
     const name = document.getElementById('ai-provider-name').value.trim();
@@ -2368,6 +2668,7 @@ async function saveAIProvider() {
     }
 }
 
+// 编辑时会把已有配置回填到表单，但不会自动重新拉模型列表。
 async function editAIProvider(providerId) {
     try {
         const providers = await pywebview.api.get_ai_providers();
@@ -2392,6 +2693,7 @@ async function editAIProvider(providerId) {
     }
 }
 
+// 启用服务商后，要同时刷新设置页和聊天页的状态指示。
 async function switchAIProvider(providerId) {
     try {
         await pywebview.api.switch_ai_provider(providerId);
@@ -2403,6 +2705,7 @@ async function switchAIProvider(providerId) {
     }
 }
 
+// 删除的是配置项，不会删除历史聊天会话数据。
 async function deleteAIProvider(providerId) {
     if (!confirm('确定删除此 AI 服务商配置？')) return;
 

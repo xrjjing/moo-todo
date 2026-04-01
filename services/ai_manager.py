@@ -2,6 +2,12 @@
 """
 AI Manager 统一管理器
 负责 Provider 管理、聊天会话、模型获取
+
+模块定位：
+- 上游：`api.py` 的 AI Provider / AI Chat 相关接口
+- 下游：`DatabaseManager` 持久化配置与聊天历史，`ai_providers.py` 发起真实模型请求
+
+它把“配置层”“会话层”“请求层”统一收口，避免前端直接感知不同服务商的差异。
 """
 
 import json
@@ -20,7 +26,19 @@ logger = logging.getLogger(__name__)
 
 
 class AIManager:
-    """统一的 AI 管理器"""
+    """统一的 AI 管理器。
+
+    主要职责：
+    1. 维护已配置 Provider 的内存态与当前活跃 Provider。
+    2. 负责临时连通性测试与模型列表拉取。
+    3. 管理 AI 聊天会话与消息历史。
+    4. 统计 Provider 调用次数、失败次数、平均时延。
+
+    排查建议：
+    - “AI 设置页看不到服务商”：先看 `_load_config()` / `get_available_providers()`
+    - “模型列表拉取失败”：看 `fetch_models()`
+    - “聊天消息没保存” 或 “会话错乱”：看 `create_session()` / `add_message()`
+    """
 
     def __init__(self, db: DatabaseManager):
         self._db = db
@@ -30,7 +48,14 @@ class AIManager:
         self._load_config()
 
     def _load_config(self):
-        """从数据库加载 AI 提供商"""
+        """从数据库加载 AI Provider 配置并重建运行态缓存。
+
+        这是 AI 子系统的核心初始化入口：
+        - 从 `ai_providers` 读取配置
+        - 构建每个启用 Provider 的实例
+        - 恢复当前活跃 Provider 指针
+        - 重建统计缓存
+        """
         try:
             providers_config = self._db.get_all('ai_providers', order_by="updated_at DESC")
 
@@ -74,7 +99,7 @@ class AIManager:
             logger.error(f"从数据库加载配置失败: {e}")
 
     def get_provider(self, provider_id: Optional[str] = None):
-        """获取指定或当前活跃的 Provider"""
+        """获取指定或当前活跃的 Provider 实例。"""
         pid = provider_id or self._active_provider_id
 
         if not pid:
@@ -87,7 +112,10 @@ class AIManager:
 
     async def chat(self, prompt: str, system_prompt: Optional[str] = None,
                    provider_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """统一的对话接口"""
+        """无历史对话入口。
+
+        适用于快速测试或不需要会话持久化的场景；真正的聊天窗口通常走 `chat_with_history()`。
+        """
         pid = provider_id or self._active_provider_id
         provider = self.get_provider(pid)
 
@@ -122,7 +150,11 @@ class AIManager:
 
     async def chat_with_history(self, messages: List[Dict], provider_id: Optional[str] = None,
                                 **kwargs) -> Dict[str, Any]:
-        """带历史记录的对话接口"""
+        """带历史记录的对话接口。
+
+        上游通常来自 `Api.send_chat_message()`。
+        它只负责把已经整理好的完整消息列表交给 Provider，不负责拼装历史。
+        """
         pid = provider_id or self._active_provider_id
         provider = self.get_provider(pid)
 
@@ -149,7 +181,7 @@ class AIManager:
             raise
 
     def switch_provider(self, provider_id: str):
-        """切换活跃的 Provider"""
+        """切换当前活跃 Provider，并同步写入 active_config。"""
         if provider_id not in self._providers:
             raise ValueError(f"Provider {provider_id} 不存在或未启用")
 
@@ -163,7 +195,10 @@ class AIManager:
         logger.info(f"切换到 Provider: {provider_id}")
 
     def get_available_providers(self) -> List[Dict[str, Any]]:
-        """获取可用的 Provider 列表"""
+        """获取前端可直接展示的 Provider 列表。
+
+        这里会隐藏敏感字段，只暴露安全摘要，比如是否存在 API Key、默认模型、统计数据等。
+        """
         result = []
 
         try:
@@ -199,7 +234,16 @@ class AIManager:
         return result
 
     async def fetch_models(self, temp_config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """动态获取可用模型列表"""
+        """动态获取可用模型列表。
+
+        设计思路：
+        - 优先使用当前用户填写的临时配置直接请求远端；
+        - 如果官方 Provider 缺少 API Key，则退回本地固定模型列表，保证设置页也能有候选项。
+
+        排查建议：
+        - OpenAI/Claude 返回 401/403：优先检查 temp_config 与环境变量中的 API Key。
+        - 兼容接口拿不到模型：继续看 `_fetch_openai_models()` 的 URL 拼接与响应格式。
+        """
         provider_type = temp_config.get('type')
         inner_config = temp_config.get('config', {})
         api_key = temp_config.get('api_key') or inner_config.get('api_key')
@@ -241,7 +285,7 @@ class AIManager:
             raise
 
     async def _fetch_openai_models(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """从 OpenAI API 获取模型列表"""
+        """从 OpenAI 兼容 `/models` 接口获取模型列表。"""
         base_url = config.get('base_url', 'https://api.openai.com/v1')
         url = f"{base_url.rstrip('/')}/models"
 
@@ -279,7 +323,7 @@ class AIManager:
             return chat_models + other_models
 
     def _get_openai_models(self) -> List[Dict[str, Any]]:
-        """返回 OpenAI 固定的模型列表"""
+        """返回内置的 OpenAI 模型兜底列表。"""
         return [
             {'id': 'gpt-4o', 'name': 'GPT-4o', 'description': '最新多模态模型'},
             {'id': 'gpt-4-turbo', 'name': 'GPT-4 Turbo', 'description': '高性能模型'},
@@ -287,7 +331,7 @@ class AIManager:
         ]
 
     async def _fetch_claude_models(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """从 Claude API 获取模型列表"""
+        """从 Claude API 获取模型列表。"""
         base_url = config.get('base_url', 'https://api.anthropic.com')
         base = base_url.rstrip('/')
         if base.endswith('/v1/models') or base.endswith('/models'):
@@ -333,7 +377,7 @@ class AIManager:
             return models
 
     def _get_claude_models(self) -> List[Dict[str, Any]]:
-        """返回 Claude 固定的模型列表"""
+        """返回内置的 Claude 模型兜底列表。"""
         return [
             {'id': 'claude-3-5-sonnet-20241022', 'name': 'Claude 3.5 Sonnet', 'description': '平衡性能与速度'},
             {'id': 'claude-3-opus-20240229', 'name': 'Claude 3 Opus', 'description': '最强推理能力'},
@@ -341,7 +385,11 @@ class AIManager:
         ]
 
     async def test_connection(self, temp_config: Dict[str, Any]) -> Dict[str, Any]:
-        """测试 Provider 连接"""
+        """测试 Provider 连接。
+
+        前端 AI 设置弹窗点击“测试连接”时会走到这里。
+        返回结构同时包含成功标志、简单响应文本与延迟，便于页面直接展示结果。
+        """
         try:
             provider = create_provider(temp_config)
             test_prompt = "Say 'Hello' in one word."
@@ -365,7 +413,12 @@ class AIManager:
             }
 
     def save_provider(self, provider_config: Dict[str, Any]) -> Dict[str, Any]:
-        """保存 Provider 配置"""
+        """保存 Provider 配置。
+
+        处理两种场景：
+        - 已存在：更新配置
+        - 不存在：新增配置；如果这是首个 Provider，会自动设为活跃 Provider
+        """
         try:
             provider_id = provider_config['id']
             from datetime import datetime
@@ -402,7 +455,10 @@ class AIManager:
             return {'success': False, 'error': str(e)}
 
     def delete_provider(self, provider_id: str) -> Dict[str, Any]:
-        """删除 Provider"""
+        """删除 Provider。
+
+        如果删掉的是当前活跃 Provider，还会顺带清理 `active_ai_provider` 指针，避免悬空引用。
+        """
         try:
             if not self._db.get_by_id('ai_providers', provider_id):
                 return {'success': False, 'error': 'Provider 不存在'}
@@ -423,7 +479,10 @@ class AIManager:
             return {'success': False, 'error': str(e)}
 
     def _update_stats(self, provider_id: str, success: bool, latency: float):
-        """更新统计信息"""
+        """更新 Provider 调用统计。
+
+        为减少数据库写频率，当前采用“内存累计 + 每 5 次请求落库一次”的策略。
+        """
         if provider_id not in self._stats_cache:
             self._stats_cache[provider_id] = {
                 'total_requests': 0,
@@ -445,7 +504,7 @@ class AIManager:
             self._save_stats(provider_id, stats)
 
     def _save_stats(self, provider_id: str, stats: Dict[str, Any]):
-        """保存统计到数据库"""
+        """把 Provider 统计写回数据库。"""
         try:
             self._db.update('ai_providers', {'stats': stats}, 'id = ?', (provider_id,))
         except Exception as e:
@@ -454,7 +513,10 @@ class AIManager:
     # ========== 聊天会话管理 ==========
 
     def create_session(self, title: str = "", provider_id: str = "", system_prompt: str = "") -> Dict[str, Any]:
-        """创建新的聊天会话"""
+        """创建新的聊天会话。
+
+        会话本身只记录元数据；真正的对话内容在 `chat_messages` 表中单独管理。
+        """
         session_id = str(uuid.uuid4())
         self._db.insert('chat_sessions', {
             'id': session_id,
@@ -468,7 +530,7 @@ class AIManager:
         return {'id': session_id, 'title': title or "新对话"}
 
     def get_sessions(self, archived: bool = False) -> List[Dict[str, Any]]:
-        """获取聊天会话列表"""
+        """获取聊天会话列表，按最近消息时间倒序返回。"""
         return self._db.get_all(
             'chat_sessions',
             where="archived = ?",
@@ -477,20 +539,23 @@ class AIManager:
         )
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """获取单个会话"""
+        """获取单个会话元数据。"""
         return self._db.get_by_id('chat_sessions', session_id)
 
     def update_session(self, session_id: str, **kwargs) -> bool:
-        """更新会话"""
+        """更新会话元数据，如标题、置顶、归档状态等。"""
         return self._db.update('chat_sessions', kwargs, 'id = ?', (session_id,))
 
     def delete_session(self, session_id: str) -> bool:
-        """删除会话"""
+        """删除会话及其全部消息。"""
         self._db.delete('chat_messages', 'session_id = ?', (session_id,))
         return self._db.delete('chat_sessions', 'id = ?', (session_id,))
 
     def add_message(self, session_id: str, role: str, content: str, provider_id: str = "") -> Dict[str, Any]:
-        """添加消息到会话"""
+        """添加消息到会话，并同步更新会话的消息计数与最近活跃时间。
+
+        这是聊天历史持久化的关键写入口；若消息顺序错乱或列表不刷新，优先看这里。
+        """
         session = self.get_session(session_id)
         if not session:
             raise ValueError("会话不存在")
@@ -516,10 +581,10 @@ class AIManager:
         return {'id': message_id, 'sequence': sequence}
 
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """获取会话的所有消息"""
+        """获取会话的全部消息，按 sequence 正序返回。"""
         return self._db.get_all('chat_messages', where='session_id = ?', params=(session_id,), order_by='sequence ASC')
 
     def clear_messages(self, session_id: str) -> bool:
-        """清空会话消息"""
+        """清空会话消息，并把会话计数重置为 0。"""
         self._db.delete('chat_messages', 'session_id = ?', (session_id,))
         return self._db.update('chat_sessions', {'message_count': 0, 'last_message_at': None}, 'id = ?', (session_id,))
